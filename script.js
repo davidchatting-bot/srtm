@@ -8,6 +8,8 @@ const app = express();
 const PORT = 3000;
 const DATA_DIR = path.join(process.cwd(), "data");
 
+app.use(express.static(path.join(process.cwd(), "p5js")));
+
 // Convert lon/lat to SRTM filename (.hgt format, unzipped)
 function lonLatToTile(lon, lat) {
   const latPrefix = lat >= 0 ? "N" : "S";

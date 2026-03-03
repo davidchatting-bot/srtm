@@ -1,5 +1,5 @@
 const TILE_SIZE = 256;
-const TILE_SERVER = 'http://localhost:3000/tiles';
+const TILE_SERVER = '/tiles';
 const MIN_ZOOM = 1;
 const MAX_ZOOM = 14;
 
