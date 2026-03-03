@@ -1,6 +1,6 @@
 # srtm
 
-A minimal Node.js/Express service that serves terrain elevation data from SRTM `.hgt` files, either as slippy map tiles or as a bounding-box PNG.
+A Node.js/Express service that serves SRTM terrain elevation data as slippy map tiles, plus a p5.js isometric viewer that renders the terrain as a 3-D bar chart.
 
 ## Setup
 
@@ -13,6 +13,12 @@ node script.js
 
 The server runs on port 3000.
 
+## Viewer
+
+Open `http://localhost:3000` in a browser to see an isometric bar-chart of the terrain centred on San Francisco. Each bar represents one SRTM sample (~90 m for SRTM3, ~30 m for SRTM1). Bar height is proportional to elevation above sea level; colour is fixed: blue at sea level, green above. Drag to pan.
+
+To change location or view radius edit the constants at the top of `p5js/sketch.js`.
+
 ## Endpoints
 
 ### Slippy map tiles
@@ -21,15 +27,29 @@ The server runs on port 3000.
 GET /tiles/:z/:x/:y.png
 ```
 
-Serves standard XYZ tiles compatible with Leaflet, OpenLayers, Mapbox GL, etc.:
+Standard XYZ tiles compatible with Leaflet, OpenLayers, Mapbox GL, etc.:
 
 ```js
 L.tileLayer('http://localhost:3000/tiles/{z}/{x}/{y}.png').addTo(map);
 ```
 
-Elevation is encoded as grayscale across a fixed range (−500m to 8500m), so neighbouring tiles are visually consistent. Areas with no data are transparent.
+Elevation is encoded as grayscale over a fixed range (−500 m to 8500 m) so neighbouring tiles are visually consistent. Areas with no data are transparent.
 
-### Bounding-box terrain
+### Data info
+
+```
+GET /info
+```
+
+Returns JSON describing the loaded SRTM data:
+
+```json
+{ "pixelDeg": 0.000833, "files": ["N37W123.hgt"] }
+```
+
+`pixelDeg` is the native sample spacing in degrees (1/1200 for SRTM3, 1/3600 for SRTM1). The viewer uses this to set the bar-chart resolution.
+
+### Bounding-box terrain image
 
 ```
 GET /terrain?lon=<longitude>&lat=<latitude>&radius=<km>
@@ -41,13 +61,7 @@ GET /terrain?lon=<longitude>&lat=<latitude>&radius=<km>
 | `lat` | yes | — | Latitude in decimal degrees |
 | `radius` | no | 5 | Radius in kilometres |
 
-Returns a grayscale PNG at full SRTM resolution centred on the given point. Brightness is normalised to the min/max elevation within the requested area.
-
-## Example
-
-```
-GET /terrain?lon=-0.118&lat=51.509&radius=10
-```
+Returns a grayscale PNG at full SRTM resolution centred on the given point. Brightness is normalised to the local min/max elevation.
 
 ## Data
 

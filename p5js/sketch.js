@@ -1,21 +1,31 @@
-const LON              = -122.4194;
+// --- Configuration ---
+// Change LON/LAT to centre on a different location.
+// RADIUS_KM controls how much terrain is shown (half-width of the square view).
+// ELEV_DISPLAY_MAX sets the elevation (metres above sea level) that reaches
+// the top of the colour scale; anything higher is clamped.
+
+const LON              = -122.4194; // San Francisco
 const LAT              = 37.7749;
-const RADIUS_KM        = 5;
-const DATA_ZOOM        = 14;
-const TILE_SIZE        = 256;
-const ELEV_MIN         = -500;
-const ELEV_RANGE       = 9000; // matches server constants
-const ELEV_DISPLAY_MAX = 300; // metres — hot pink at 300m (Twin Peaks ~282m)
+const RADIUS_KM        = 5;         // 10 km total view
+const DATA_ZOOM        = 14;        // slippy-map zoom level used for tile requests
+const TILE_SIZE        = 256;       // pixels per tile (matches server)
+const ELEV_MIN         = -500;      // must match server ELEV_MIN
+const ELEV_RANGE       = 9000;      // must match server ELEV_RANGE
+const ELEV_DISPLAY_MAX = 300;       // metres at which the colour scale tops out
 
-let centerX, centerY;
-let areaW, areaH;
-let cellW, cellH;
-let tileMinX, tileMinY;
-let tileCache = {};
+// --- State ---
+
+let centerX, centerY;   // current view centre in fractional tile coordinates
+let areaW, areaH;       // view width/height in tile units
+let cellW, cellH;       // screen pixels per tile unit (cellH = cellW/2 for 2:1 iso)
+let tileMinX, tileMinY; // top-left corner of the view in tile coordinates
+let tileCache = {};     // keyed by "z/x/y"; stores { pixels, status }
 let isDragging = false;
-let GRID_W = 100;  // replaced in preload() once pixelDeg is known
-let GRID_H = 100;
+let GRID_W = 100;       // bars across — set in preload() from /info pixelDeg
+let GRID_H = 100;       // bars deep
 
+// Fetch SRTM data resolution from the server and compute the bar grid size
+// so each bar maps to one native SRTM sample (90 m for SRTM3, 30 m for SRTM1).
 function preload() {
   loadJSON('/info', info => {
     const lonSpan = 2 * RADIUS_KM / (111.32 * Math.cos(LAT * Math.PI / 180));
