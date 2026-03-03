@@ -146,6 +146,13 @@ function kmToDegreeOffsets(lat, radiusKm) {
 
 // --- Routes ---
 
+app.get("/info", (req, res) => {
+  const files = fs.readdirSync(DATA_DIR).filter(f => f.endsWith(".hgt"));
+  if (files.length === 0) return res.status(404).json({ error: "No data" });
+  const { pixelDeg } = openHGT(path.join(DATA_DIR, files[0]));
+  res.json({ pixelDeg, files });
+});
+
 app.get("/heightmap", (req, res) => {
   const lon     = parseFloat(req.query.lon);
   const lat     = parseFloat(req.query.lat);

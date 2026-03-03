@@ -1,12 +1,10 @@
-const LON       = -122.4194;
-const LAT       = 37.7749;
-const RADIUS_KM = 5;
-const DATA_ZOOM = 14;
-const TILE_SIZE = 256;
-const GRID_W    = 80;   // bars across
-const GRID_H    = 80;   // bars deep
-const ELEV_MIN      = -500;
-const ELEV_RANGE    = 9000; // matches server constants
+const LON              = -122.4194;
+const LAT              = 37.7749;
+const RADIUS_KM        = 5;
+const DATA_ZOOM        = 14;
+const TILE_SIZE        = 256;
+const ELEV_MIN         = -500;
+const ELEV_RANGE       = 9000; // matches server constants
 const ELEV_DISPLAY_MAX = 1000; // metres — bars reach full height at this elevation
 
 let centerX, centerY;
@@ -15,6 +13,17 @@ let cellW, cellH;
 let tileMinX, tileMinY;
 let tileCache = {};
 let isDragging = false;
+let GRID_W = 100;  // replaced in preload() once pixelDeg is known
+let GRID_H = 100;
+
+function preload() {
+  loadJSON('/info', info => {
+    const lonSpan = 2 * RADIUS_KM / (111.32 * Math.cos(LAT * Math.PI / 180));
+    const latSpan = 2 * RADIUS_KM / 111.32;
+    GRID_W = Math.round(lonSpan / info.pixelDeg);
+    GRID_H = Math.round(latSpan / info.pixelDeg);
+  });
+}
 
 function setup() {
   createCanvas(windowWidth, windowHeight).parent('map');
