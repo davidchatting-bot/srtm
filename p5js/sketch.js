@@ -5,8 +5,9 @@ const DATA_ZOOM = 14;
 const TILE_SIZE = 256;
 const GRID_W    = 80;   // bars across
 const GRID_H    = 80;   // bars deep
-const ELEV_MIN  = -500;
-const ELEV_RANGE = 9000; // matches server constants
+const ELEV_MIN      = -500;
+const ELEV_RANGE    = 9000; // matches server constants
+const ELEV_DISPLAY_MAX = 1000; // metres — bars reach full height at this elevation
 
 let centerX, centerY;
 let areaW, areaH;
@@ -101,23 +102,16 @@ function draw() {
   background(15);
   ensureTilesLoaded();
 
-  // Build elevation grid and find local range for normalisation
+  // Build elevation grid
   const elevGrid = new Float32Array(GRID_W * GRID_H);
-  let localMin = Infinity, localMax = -Infinity;
 
   for (let gy = 0; gy < GRID_H; gy++) {
     for (let gx = 0; gx < GRID_W; gx++) {
-      const e = sampleElevation(gx, gy);
-      elevGrid[gy * GRID_W + gx] = e;
-      if (!isNaN(e)) {
-        if (e < localMin) localMin = e;
-        if (e > localMax) localMax = e;
-      }
+      elevGrid[gy * GRID_W + gx] = sampleElevation(gx, gy);
     }
   }
 
-  const localRange = localMax - localMin || 1;
-  const maxBarH    = height * 0.18;
+  const maxBarH = height * 0.18;
   const cellTW     = areaW / GRID_W;
   const cellTH     = areaH / GRID_H;
 
@@ -128,7 +122,7 @@ function draw() {
       const elev = elevGrid[gy * GRID_W + gx];
       if (isNaN(elev)) continue;
 
-      const t    = (elev - localMin) / localRange;
+      const t    = Math.max(0, elev) / ELEV_DISPLAY_MAX;
       const barH = t * maxBarH;
       const tx   = tileMinX + gx / GRID_W * areaW;
       const ty   = tileMinY + gy / GRID_H * areaH;
