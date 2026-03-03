@@ -1,6 +1,6 @@
 # srtm
 
-A minimal Node.js/Express service that serves terrain elevation data as PNG images from SRTM `.hgt` files.
+A minimal Node.js/Express service that serves terrain elevation data from SRTM `.hgt` files, either as slippy map tiles or as a bounding-box PNG.
 
 ## Setup
 
@@ -13,7 +13,23 @@ node script.js
 
 The server runs on port 3000.
 
-## Usage
+## Endpoints
+
+### Slippy map tiles
+
+```
+GET /tiles/:z/:x/:y.png
+```
+
+Serves standard XYZ tiles compatible with Leaflet, OpenLayers, Mapbox GL, etc.:
+
+```js
+L.tileLayer('http://localhost:3000/tiles/{z}/{x}/{y}.png').addTo(map);
+```
+
+Elevation is encoded as grayscale across a fixed range (−500m to 8500m), so neighbouring tiles are visually consistent. Areas with no data are transparent.
+
+### Bounding-box terrain
 
 ```
 GET /terrain?lon=<longitude>&lat=<latitude>&radius=<km>
@@ -25,7 +41,7 @@ GET /terrain?lon=<longitude>&lat=<latitude>&radius=<km>
 | `lat` | yes | — | Latitude in decimal degrees |
 | `radius` | no | 5 | Radius in kilometres |
 
-Returns a grayscale PNG where pixel brightness represents relative elevation within the requested area.
+Returns a grayscale PNG at full SRTM resolution centred on the given point. Brightness is normalised to the min/max elevation within the requested area.
 
 ## Example
 
