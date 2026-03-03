@@ -1,6 +1,6 @@
 const LON              = -122.4194;
 const LAT              = 37.7749;
-const RADIUS_KM        = 5;
+const RADIUS_KM        = 0.5;
 const DATA_ZOOM        = 14;
 const TILE_SIZE        = 256;
 const ELEV_MIN         = -500;
