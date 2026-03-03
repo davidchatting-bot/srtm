@@ -148,14 +148,10 @@ function draw() {
 // Late 1980s Amiga-style stepped elevation palette
 // Each row: [top rgb, right-face rgb, front-face rgb]
 const AMIGA_PALETTE = [
-  [[  0,  44, 170], [  0,  30, 120], [  0,  20,  88]],  // deep blue
-  [[  0, 110, 210], [  0,  78, 150], [  0,  58, 110]],  // blue
-  [[  0, 170,  80], [  0, 120,  55], [  0,  88,  40]],  // dark green
-  [[  0, 220,   0], [  0, 158,   0], [  0, 118,   0]],  // bright green
-  [[170, 220,   0], [122, 158,   0], [ 90, 118,   0]],  // yellow-green
-  [[255, 200,   0], [188, 144,   0], [148, 108,   0]],  // yellow
-  [[255, 110,   0], [188,  78,   0], [148,  58,   0]],  // orange
-  [[255,  30,  80], [188,  15,  55], [148,   8,  40]],  // hot pink
+  [[  0,  44, 170], [  0,  28, 120], [  0,  18,  88]],  // deep blue
+  [[  0, 220,   0], [  0, 155,   0], [  0, 115,   0]],  // bright green
+  [[255, 160,   0], [188, 112,   0], [148,  82,   0]],  // orange
+  [[255,  20, 140], [188,   8,  95], [148,   4,  68]],  // hot pink
 ];
 
 // Draw one isometric bar: top + right face + front face
