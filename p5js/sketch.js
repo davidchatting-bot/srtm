@@ -5,7 +5,7 @@ const DATA_ZOOM        = 14;
 const TILE_SIZE        = 256;
 const ELEV_MIN         = -500;
 const ELEV_RANGE       = 9000; // matches server constants
-const ELEV_DISPLAY_MAX = 1000; // metres — bars reach full height at this elevation
+const ELEV_DISPLAY_MAX = 300; // metres — hot pink at 300m (Twin Peaks ~282m)
 
 let centerX, centerY;
 let areaW, areaH;
@@ -111,15 +111,12 @@ function draw() {
   background(15);
   ensureTilesLoaded();
 
-  // Build elevation grid and find local maximum (sea level stays fixed at 0)
+  // Build elevation grid
   const elevGrid = new Float32Array(GRID_W * GRID_H);
-  let localMax = 1;
 
   for (let gy = 0; gy < GRID_H; gy++) {
     for (let gx = 0; gx < GRID_W; gx++) {
-      const e = sampleElevation(gx, gy);
-      elevGrid[gy * GRID_W + gx] = e;
-      if (!isNaN(e) && e > localMax) localMax = e;
+      elevGrid[gy * GRID_W + gx] = sampleElevation(gx, gy);
     }
   }
 
@@ -134,7 +131,7 @@ function draw() {
       const elev = elevGrid[gy * GRID_W + gx];
       if (isNaN(elev)) continue;
 
-      const t    = Math.max(0, elev) / localMax;
+      const t    = Math.max(0, elev) / ELEV_DISPLAY_MAX;
       const barH = t * maxBarH;
       const tx   = tileMinX + gx / GRID_W * areaW;
       const ty   = tileMinY + gy / GRID_H * areaH;
