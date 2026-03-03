@@ -1,0 +1,41 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #111;
+  font-family: monospace;
+}
+
+#map {
+  width: 100%;
+  height: 100%;
+  cursor: grab;
+}
+
+#map:active {
+  cursor: grabbing;
+}
+
+#map canvas {
+  display: block;
+}
+
+#info {
+  position: fixed;
+  bottom: 12px;
+  left: 12px;
+  display: flex;
+  gap: 16px;
+  color: #fff;
+  font-size: 12px;
+  background: rgba(0, 0, 0, 0.5);
+  padding: 6px 10px;
+  border-radius: 4px;
+  pointer-events: none;
+}
