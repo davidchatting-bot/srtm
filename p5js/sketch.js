@@ -1,25 +1,22 @@
-// All tiles are composited into a flat off-screen buffer first,
-// then the whole buffer is projected isometrically as one image.
-// This eliminates seams between tiles entirely.
-
-const LON         = -122.4194;
-const LAT         = 37.7749;
-const RADIUS_KM   = 5;
-const DATA_ZOOM   = 14;
-const TILE_SIZE   = 256;
-const BUFFER_SIZE = 2048;
+const LON       = -122.4194;
+const LAT       = 37.7749;
+const RADIUS_KM = 5;
+const DATA_ZOOM = 14;
+const TILE_SIZE = 256;
+const GRID_W    = 80;   // bars across
+const GRID_H    = 80;   // bars deep
+const ELEV_MIN  = -500;
+const ELEV_RANGE = 9000; // matches server constants
 
 let centerX, centerY;
 let areaW, areaH;
 let cellW, cellH;
+let tileMinX, tileMinY;
 let tileCache = {};
-let terrain;          // flat off-screen canvas
 let isDragging = false;
 
 function setup() {
-  const canvas = createCanvas(windowWidth, windowHeight);
-  canvas.parent('map');
-  terrain = createGraphics(BUFFER_SIZE, BUFFER_SIZE);
+  createCanvas(windowWidth, windowHeight).parent('map');
   computeLayout();
 }
 
@@ -50,85 +47,120 @@ function nVertex(tx, ty) {
   };
 }
 
-// Composite all loaded tiles into the flat terrain buffer
-function updateTerrainBuffer() {
-  const tileMinX = centerX - areaW / 2;
-  const tileMaxX = centerX + areaW / 2;
-  const tileMinY = centerY - areaH / 2;
-  const tileMaxY = centerY + areaH / 2;
-
-  terrain.clear();
+// Kick off loads for all tiles in view; cache pixel data on arrival
+function ensureTilesLoaded() {
+  tileMinX = centerX - areaW / 2;
+  tileMinY = centerY - areaH / 2;
 
   const tx0 = Math.floor(tileMinX);
-  const tx1 = Math.ceil(tileMaxX);
+  const tx1 = Math.ceil(centerX + areaW / 2);
   const ty0 = Math.floor(tileMinY);
-  const ty1 = Math.ceil(tileMaxY);
+  const ty1 = Math.ceil(centerY + areaH / 2);
   const maxTile = Math.pow(2, DATA_ZOOM);
 
   for (let tx = tx0; tx <= tx1; tx++) {
     for (let ty = ty0; ty <= ty1; ty++) {
       if (ty < 0 || ty >= maxTile) continue;
+      const wtx = ((tx % maxTile) + maxTile) % maxTile;
+      const key = `${DATA_ZOOM}/${wtx}/${ty}`;
+      if (tileCache[key]) continue;
 
-      const wrappedTx = ((tx % maxTile) + maxTile) % maxTile;
-      const key = `${DATA_ZOOM}/${wrappedTx}/${ty}`;
-
-      if (!tileCache[key]) {
-        tileCache[key] = { img: null, status: 'loading' };
-        loadImage(
-          `/tiles/${DATA_ZOOM}/${wrappedTx}/${ty}.png`,
-          img => { tileCache[key] = { img, status: 'loaded' }; },
-          ()  => { tileCache[key] = { img: null, status: 'error' }; }
-        );
-      }
-
-      const entry = tileCache[key];
-      if (entry.status !== 'loaded' || !entry.img) continue;
-
-      // Flat 2D position within the buffer
-      const bx = (tx - tileMinX) / areaW * BUFFER_SIZE;
-      const by = (ty - tileMinY) / areaH * BUFFER_SIZE;
-      const bw = BUFFER_SIZE / areaW;
-      const bh = BUFFER_SIZE / areaH;
-
-      terrain.image(entry.img, bx, by, bw, bh);
+      tileCache[key] = { pixels: null, status: 'loading' };
+      loadImage(
+        `/tiles/${DATA_ZOOM}/${wtx}/${ty}.png`,
+        img => {
+          img.loadPixels();
+          tileCache[key] = { pixels: new Uint8Array(img.pixels), status: 'loaded' };
+        },
+        () => { tileCache[key] = { pixels: null, status: 'error' }; }
+      );
     }
   }
 }
 
+// Sample elevation (metres) at grid cell centre; returns NaN if no data
+function sampleElevation(gx, gy) {
+  const tx = tileMinX + (gx + 0.5) / GRID_W * areaW;
+  const ty = tileMinY + (gy + 0.5) / GRID_H * areaH;
+  const itx = Math.floor(tx);
+  const ity = Math.floor(ty);
+  const px  = Math.min(TILE_SIZE - 1, Math.floor((tx - itx) * TILE_SIZE));
+  const py  = Math.min(TILE_SIZE - 1, Math.floor((ty - ity) * TILE_SIZE));
+
+  const maxTile = Math.pow(2, DATA_ZOOM);
+  const wtx = ((itx % maxTile) + maxTile) % maxTile;
+  const entry = tileCache[`${DATA_ZOOM}/${wtx}/${ity}`];
+  if (!entry || entry.status !== 'loaded') return NaN;
+
+  const idx = (py * TILE_SIZE + px) * 4;
+  if (entry.pixels[idx + 3] < 128) return NaN;
+  return (entry.pixels[idx] / 255) * ELEV_RANGE + ELEV_MIN;
+}
+
 function draw() {
   background(15);
+  ensureTilesLoaded();
 
-  const tileMinX = centerX - areaW / 2;
-  const tileMaxX = centerX + areaW / 2;
-  const tileMinY = centerY - areaH / 2;
-  const tileMaxY = centerY + areaH / 2;
+  // Build elevation grid and find local range for normalisation
+  const elevGrid = new Float32Array(GRID_W * GRID_H);
+  let localMin = Infinity, localMax = -Infinity;
 
-  updateTerrainBuffer();
+  for (let gy = 0; gy < GRID_H; gy++) {
+    for (let gx = 0; gx < GRID_W; gx++) {
+      const e = sampleElevation(gx, gy);
+      elevGrid[gy * GRID_W + gx] = e;
+      if (!isNaN(e)) {
+        if (e < localMin) localMin = e;
+        if (e > localMax) localMax = e;
+      }
+    }
+  }
 
-  // Derive affine transform from the three corners of the destination rhombus
-  const N = nVertex(tileMinX, tileMinY);  // buffer (0, 0)
-  const E = nVertex(tileMaxX, tileMinY);  // buffer (BUFFER_SIZE, 0)
-  const W = nVertex(tileMinX, tileMaxY);  // buffer (0, BUFFER_SIZE)
+  const localRange = localMax - localMin || 1;
+  const maxBarH    = height * 0.18;
+  const cellTW     = areaW / GRID_W;
+  const cellTH     = areaH / GRID_H;
 
-  push();
-  applyMatrix(
-    (E.x - N.x) / BUFFER_SIZE,
-    (E.y - N.y) / BUFFER_SIZE,
-    (W.x - N.x) / BUFFER_SIZE,
-    (W.y - N.y) / BUFFER_SIZE,
-    N.x,
-    N.y
-  );
-  image(terrain, 0, 0, BUFFER_SIZE, BUFFER_SIZE);
-  pop();
+  // Painter's algorithm: render back-to-front along ascending gx+gy diagonals
+  for (let sum = 0; sum < GRID_W + GRID_H - 1; sum++) {
+    for (let gx = max(0, sum - GRID_H + 1); gx <= min(sum, GRID_W - 1); gx++) {
+      const gy   = sum - gx;
+      const elev = elevGrid[gy * GRID_W + gx];
+      if (isNaN(elev)) continue;
+
+      const t    = (elev - localMin) / localRange;
+      const barH = t * maxBarH;
+      const tx   = tileMinX + gx / GRID_W * areaW;
+      const ty   = tileMinY + gy / GRID_H * areaH;
+      drawBar(tx, ty, cellTW, cellTH, barH, t);
+    }
+  }
 
   updateInfo();
 }
 
-function updateInfo() {
-  document.getElementById('coords').textContent =
-    `${tileYToLat(centerY, DATA_ZOOM).toFixed(4)}°, ${tileXToLon(centerX, DATA_ZOOM).toFixed(4)}°`;
-  document.getElementById('zoom-level').textContent = `${RADIUS_KM * 2}km`;
+// Draw one isometric bar: top + right face + front face
+function drawBar(tx, ty, tw, th, barH, t) {
+  const TL = nVertex(tx,      ty);
+  const TR = nVertex(tx + tw, ty);
+  const BR = nVertex(tx + tw, ty + th);
+  const BL = nVertex(tx,      ty + th);
+
+  noStroke();
+
+  if (barH > 0.5) {
+    // Right (east-facing) face
+    fill(lerp(20, 80,  t), lerp(50, 140, t), lerp(80, 180, t));
+    quad(TR.x, TR.y, BR.x, BR.y, BR.x, BR.y - barH, TR.x, TR.y - barH);
+
+    // Front (south-facing) face
+    fill(lerp(15, 55,  t), lerp(38, 108, t), lerp(65, 145, t));
+    quad(BL.x, BL.y, BR.x, BR.y, BR.x, BR.y - barH, BL.x, BL.y - barH);
+  }
+
+  // Top face
+  fill(lerp(50, 160, t), lerp(90, 215, t), lerp(90, 235, t));
+  quad(TL.x, TL.y - barH, TR.x, TR.y - barH, BR.x, BR.y - barH, BL.x, BL.y - barH);
 }
 
 // --- Interaction ---
@@ -147,6 +179,12 @@ function mouseDragged() {
 function windowResized() {
   resizeCanvas(windowWidth, windowHeight);
   computeLayout();
+}
+
+function updateInfo() {
+  document.getElementById('coords').textContent =
+    `${tileYToLat(centerY, DATA_ZOOM).toFixed(4)}°, ${tileXToLon(centerX, DATA_ZOOM).toFixed(4)}°`;
+  document.getElementById('zoom-level').textContent = `${RADIUS_KM * 2}km`;
 }
 
 // --- Tile coordinate math ---
