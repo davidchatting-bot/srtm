@@ -142,6 +142,19 @@ function draw() {
   updateInfo();
 }
 
+// Late 1980s Amiga-style stepped elevation palette
+// Each row: [top rgb, right-face rgb, front-face rgb]
+const AMIGA_PALETTE = [
+  [[  0,  44, 170], [  0,  30, 120], [  0,  20,  88]],  // deep blue
+  [[  0, 110, 210], [  0,  78, 150], [  0,  58, 110]],  // blue
+  [[  0, 170,  80], [  0, 120,  55], [  0,  88,  40]],  // dark green
+  [[  0, 220,   0], [  0, 158,   0], [  0, 118,   0]],  // bright green
+  [[170, 220,   0], [122, 158,   0], [ 90, 118,   0]],  // yellow-green
+  [[255, 200,   0], [188, 144,   0], [148, 108,   0]],  // yellow
+  [[255, 110,   0], [188,  78,   0], [148,  58,   0]],  // orange
+  [[255,  30,  80], [188,  15,  55], [148,   8,  40]],  // hot pink
+];
+
 // Draw one isometric bar: top + right face + front face
 function drawBar(tx, ty, tw, th, barH, t) {
   const TL = nVertex(tx,      ty);
@@ -149,20 +162,20 @@ function drawBar(tx, ty, tw, th, barH, t) {
   const BR = nVertex(tx + tw, ty + th);
   const BL = nVertex(tx,      ty + th);
 
+  const step = min(AMIGA_PALETTE.length - 1, floor(t * AMIGA_PALETTE.length));
+  const [top, right, front] = AMIGA_PALETTE[step];
+
   noStroke();
 
   if (barH > 0.5) {
-    // Right (east-facing) face
-    fill(lerp(20, 80,  t), lerp(50, 140, t), lerp(80, 180, t));
+    fill(...right);
     quad(TR.x, TR.y, BR.x, BR.y, BR.x, BR.y - barH, TR.x, TR.y - barH);
 
-    // Front (south-facing) face
-    fill(lerp(15, 55,  t), lerp(38, 108, t), lerp(65, 145, t));
+    fill(...front);
     quad(BL.x, BL.y, BR.x, BR.y, BR.x, BR.y - barH, BL.x, BL.y - barH);
   }
 
-  // Top face
-  fill(lerp(50, 160, t), lerp(90, 215, t), lerp(90, 235, t));
+  fill(...top);
   quad(TL.x, TL.y - barH, TR.x, TR.y - barH, BR.x, BR.y - barH, BL.x, BL.y - barH);
 }
 
