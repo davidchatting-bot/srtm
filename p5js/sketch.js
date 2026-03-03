@@ -1,18 +1,25 @@
-const LON       = -122.4194;
-const LAT       = 37.7749;
-const RADIUS_KM = 5;         // 5km radius = 10km × 10km total area
-const DATA_ZOOM = 14;
-const TILE_SIZE = 256;
+// All tiles are composited into a flat off-screen buffer first,
+// then the whole buffer is projected isometrically as one image.
+// This eliminates seams between tiles entirely.
 
-let centerX, centerY;  // fractional tile coords of screen centre (updated by drag)
-let areaW, areaH;      // area extent in tiles
-let cellW, cellH;      // pixels per tile on screen
+const LON         = -122.4194;
+const LAT         = 37.7749;
+const RADIUS_KM   = 5;
+const DATA_ZOOM   = 14;
+const TILE_SIZE   = 256;
+const BUFFER_SIZE = 2048;
+
+let centerX, centerY;
+let areaW, areaH;
+let cellW, cellH;
 let tileCache = {};
+let terrain;          // flat off-screen canvas
 let isDragging = false;
 
 function setup() {
   const canvas = createCanvas(windowWidth, windowHeight);
   canvas.parent('map');
+  terrain = createGraphics(BUFFER_SIZE, BUFFER_SIZE);
   computeLayout();
 }
 
@@ -20,13 +27,11 @@ function computeLayout() {
   const lonOffset = RADIUS_KM / (111.32 * Math.cos(LAT * Math.PI / 180));
   const latOffset = RADIUS_KM / 111.32;
 
-  // Keep centre fixed to original lat/lon on first call only
   if (!centerX) {
     centerX = lonToTileX(LON, DATA_ZOOM);
     centerY = latToTileY(LAT, DATA_ZOOM);
   }
 
-  // Area half-extents in tile units (fixed to RADIUS_KM, doesn't change on pan)
   areaW = lonToTileX(LON + lonOffset, DATA_ZOOM) - lonToTileX(LON - lonOffset, DATA_ZOOM);
   areaH = latToTileY(LAT - latOffset, DATA_ZOOM) - latToTileY(LAT + latOffset, DATA_ZOOM);
 
@@ -35,6 +40,7 @@ function computeLayout() {
   cellH = cellW / 2;
 }
 
+// Screen position of a fractional tile coordinate
 function nVertex(tx, ty) {
   const dx = tx - centerX;
   const dy = ty - centerY;
@@ -44,40 +50,24 @@ function nVertex(tx, ty) {
   };
 }
 
-function draw() {
-  background(15);
-
+// Composite all loaded tiles into the flat terrain buffer
+function updateTerrainBuffer() {
   const tileMinX = centerX - areaW / 2;
   const tileMaxX = centerX + areaW / 2;
   const tileMinY = centerY - areaH / 2;
   const tileMaxY = centerY + areaH / 2;
 
-  const N = nVertex(tileMinX, tileMinY);
-  const E = nVertex(tileMaxX, tileMinY);
-  const S = nVertex(tileMaxX, tileMaxY);
-  const W = nVertex(tileMinX, tileMaxY);
+  terrain.clear();
 
-  // Clip to the rhombus
-  drawingContext.save();
-  drawingContext.beginPath();
-  drawingContext.moveTo(N.x, N.y);
-  drawingContext.lineTo(E.x, E.y);
-  drawingContext.lineTo(S.x, S.y);
-  drawingContext.lineTo(W.x, W.y);
-  drawingContext.closePath();
-  drawingContext.clip();
-
-  const tx0     = Math.floor(tileMinX);
-  const tx1     = Math.ceil(tileMaxX);
-  const ty0     = Math.floor(tileMinY);
-  const ty1     = Math.ceil(tileMaxY);
+  const tx0 = Math.floor(tileMinX);
+  const tx1 = Math.ceil(tileMaxX);
+  const ty0 = Math.floor(tileMinY);
+  const ty1 = Math.ceil(tileMaxY);
   const maxTile = Math.pow(2, DATA_ZOOM);
 
-  for (let sum = tx0 + ty0; sum <= tx1 + ty1; sum++) {
-    for (let tx = tx0; tx <= tx1; tx++) {
-      const ty = sum - tx;
-      if (ty < ty0 || ty > ty1) continue;
-      if (ty < 0   || ty >= maxTile) continue;
+  for (let tx = tx0; tx <= tx1; tx++) {
+    for (let ty = ty0; ty <= ty1; ty++) {
+      if (ty < 0 || ty >= maxTile) continue;
 
       const wrappedTx = ((tx % maxTile) + maxTile) % maxTile;
       const key = `${DATA_ZOOM}/${wrappedTx}/${ty}`;
@@ -94,17 +84,44 @@ function draw() {
       const entry = tileCache[key];
       if (entry.status !== 'loaded' || !entry.img) continue;
 
-      const { x: nx, y: ny } = nVertex(tx, ty);
+      // Flat 2D position within the buffer
+      const bx = (tx - tileMinX) / areaW * BUFFER_SIZE;
+      const by = (ty - tileMinY) / areaH * BUFFER_SIZE;
+      const bw = BUFFER_SIZE / areaW;
+      const bh = BUFFER_SIZE / areaH;
 
-      push();
-      applyMatrix(0.5, 0.25, -0.5, 0.25, nx, ny);
-      // Overdraw by 1px in image space to close sub-pixel gaps at tile edges
-      image(entry.img, -0.5, -0.5, TILE_SIZE + 1, TILE_SIZE + 1);
-      pop();
+      terrain.image(entry.img, bx, by, bw, bh);
     }
   }
+}
 
-  drawingContext.restore();
+function draw() {
+  background(15);
+
+  const tileMinX = centerX - areaW / 2;
+  const tileMaxX = centerX + areaW / 2;
+  const tileMinY = centerY - areaH / 2;
+  const tileMaxY = centerY + areaH / 2;
+
+  updateTerrainBuffer();
+
+  // Derive affine transform from the three corners of the destination rhombus
+  const N = nVertex(tileMinX, tileMinY);  // buffer (0, 0)
+  const E = nVertex(tileMaxX, tileMinY);  // buffer (BUFFER_SIZE, 0)
+  const W = nVertex(tileMinX, tileMaxY);  // buffer (0, BUFFER_SIZE)
+
+  push();
+  applyMatrix(
+    (E.x - N.x) / BUFFER_SIZE,
+    (E.y - N.y) / BUFFER_SIZE,
+    (W.x - N.x) / BUFFER_SIZE,
+    (W.y - N.y) / BUFFER_SIZE,
+    N.x,
+    N.y
+  );
+  image(terrain, 0, 0, BUFFER_SIZE, BUFFER_SIZE);
+  pop();
+
   updateInfo();
 }
 
@@ -123,7 +140,6 @@ function mouseDragged() {
   if (!isDragging) return;
   const dMX = mouseX - pmouseX;
   const dMY = mouseY - pmouseY;
-  // Inverse isometric projection to tile-space delta
   centerX -= (dMX + 2 * dMY) / cellW;
   centerY += (dMX - 2 * dMY) / cellW;
 }
