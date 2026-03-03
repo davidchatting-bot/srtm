@@ -146,6 +146,31 @@ function kmToDegreeOffsets(lat, radiusKm) {
 
 // --- Routes ---
 
+app.get("/heightmap", (req, res) => {
+  const lon     = parseFloat(req.query.lon);
+  const lat     = parseFloat(req.query.lat);
+  const radiusKm = parseFloat(req.query.radius)  || 1;
+  const samples  = Math.min(256, Math.max(2, parseInt(req.query.samples) || 64));
+
+  if (isNaN(lon) || isNaN(lat)) return res.status(400).send("Invalid lon/lat");
+
+  const { latOffset, lonOffset } = kmToDegreeOffsets(lat, radiusKm);
+  const cache = loadSRTMCache(lon - lonOffset, lat - latOffset, lon + lonOffset, lat + latOffset);
+  if (cache.size === 0) return res.status(404).send("No elevation data available");
+
+  const data = new Array(samples * samples);
+  for (let row = 0; row < samples; row++) {
+    for (let col = 0; col < samples; col++) {
+      const sLon = (lon - lonOffset) + (col / (samples - 1)) * lonOffset * 2;
+      const sLat = (lat + latOffset) - (row / (samples - 1)) * latOffset * 2;
+      const val  = sampleCache(cache, sLon, sLat);
+      data[row * samples + col] = isNaN(val) ? 0 : val;
+    }
+  }
+
+  res.json({ samples, data });
+});
+
 app.get("/tiles/:z/:x/:y.png", (req, res) => {
   try {
     const z = parseInt(req.params.z);

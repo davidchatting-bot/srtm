@@ -1,148 +1,104 @@
-const TILE_SIZE = 256;
-const TILE_SERVER = '/tiles';
-const MIN_ZOOM = 1;
-const MAX_ZOOM = 14;
+const CENTER_LON = -122.4194;
+const CENTER_LAT  = 37.7749;
+const RADIUS_KM   = 1;
+const SAMPLES     = 64;
 
-// Map state — centre in fractional tile coordinates at current zoom
-let zoom = 8;
-let centerX; // fractional tile x
-let centerY; // fractional tile y
-
-let tileCache = {};
-let isDragging = false;
-let dragStart = {};
+let heightmap = null;
+let hN = 0;
+let elevMin = 0;
+let elevMax = 1;
 
 function setup() {
-  const canvas = createCanvas(windowWidth, windowHeight);
-  canvas.parent('map');
+  createCanvas(windowWidth, windowHeight);
+  noLoop();
+  fetchHeightmap();
+}
 
-  // Default to London
-  const lon = -0.118;
-  const lat = 51.509;
-  centerX = lonToTileX(lon, zoom);
-  centerY = latToTileY(lat, zoom);
+function fetchHeightmap() {
+  fetch(`/heightmap?lon=${CENTER_LON}&lat=${CENTER_LAT}&radius=${RADIUS_KM}&samples=${SAMPLES}`)
+    .then(r => r.json())
+    .then(d => {
+      hN = d.samples;
+      heightmap = d.data;
+      elevMin = Infinity;
+      elevMax = -Infinity;
+      for (const v of heightmap) {
+        if (v < elevMin) elevMin = v;
+        if (v > elevMax) elevMax = v;
+      }
+      redraw();
+    });
+}
+
+function getElev(ix, iy) {
+  if (!heightmap || ix < 0 || ix >= hN || iy < 0 || iy >= hN) return elevMin;
+  return heightmap[iy * hN + ix];
 }
 
 function draw() {
-  background(30);
-  drawTiles();
-  updateInfo();
-}
+  background(15);
 
-function drawTiles() {
-  const halfW = width  / 2;
-  const halfH = height / 2;
+  if (!heightmap) {
+    fill(180);
+    noStroke();
+    textAlign(CENTER, CENTER);
+    textSize(16);
+    text('Loading...', width / 2, height / 2);
+    return;
+  }
 
-  // Range of tiles visible on screen
-  const x0 = Math.floor(centerX - halfW / TILE_SIZE) - 1;
-  const x1 = Math.ceil (centerX + halfW / TILE_SIZE) + 1;
-  const y0 = Math.floor(centerY - halfH / TILE_SIZE) - 1;
-  const y1 = Math.ceil (centerY + halfH / TILE_SIZE) + 1;
+  const range     = elevMax - elevMin || 1;
+  const cellW     = min(width * 0.95, height * 1.9) / (hN - 1);
+  const cellH     = cellW / 2;
+  const elevScale = cellH * 6 / range; // total elev range = 6 cell heights
+  const cx        = width  / 2;
+  const cy        = height * 0.6;
 
-  const maxTile = Math.pow(2, zoom);
+  // Precompute iso X (doesn't depend on elevation)
+  const isoX = (ix, iy) => cx + (ix - iy) * cellW / 2;
+  const isoY = (ix, iy, z) => cy + (ix + iy - hN + 1) * cellH / 2 - (z - elevMin) * elevScale;
 
-  for (let tx = x0; tx <= x1; tx++) {
-    for (let ty = y0; ty <= y1; ty++) {
-      // Skip tiles outside valid range
-      if (ty < 0 || ty >= maxTile) continue;
+  noStroke();
 
-      // Wrap longitude
-      const wrappedTx = ((tx % maxTile) + maxTile) % maxTile;
-      const key = `${zoom}/${wrappedTx}/${ty}`;
+  // Painter's algorithm: draw diagonal strips back to front
+  for (let d = 0; d < 2 * (hN - 1); d++) {
+    for (let ix = 0; ix < hN - 1; ix++) {
+      const iy = d - ix;
+      if (iy < 0 || iy >= hN - 1) continue;
 
-      // Screen position of tile's top-left corner
-      const screenX = (tx - centerX) * TILE_SIZE + halfW;
-      const screenY = (ty - centerY) * TILE_SIZE + halfH;
+      const z00 = getElev(ix,     iy);
+      const z10 = getElev(ix + 1, iy);
+      const z11 = getElev(ix + 1, iy + 1);
+      const z01 = getElev(ix,     iy + 1);
+      const zAvg = (z00 + z10 + z11 + z01) / 4;
 
-      if (!tileCache[key]) {
-        tileCache[key] = { img: null, status: 'loading' };
-        loadImage(
-          `${TILE_SERVER}/${zoom}/${wrappedTx}/${ty}.png`,
-          img => { tileCache[key] = { img, status: 'loaded' }; },
-          ()  => { tileCache[key] = { img: null, status: 'error' }; }
-        );
-      }
+      // Hillshading: finite difference slope, light from upper-left
+      const dzdx = (z10 + z11 - z00 - z01) / 2;
+      const dzdy = (z01 + z11 - z00 - z10) / 2;
+      const shade = constrain(0.6 + (dzdx - dzdy) / range, 0.15, 1.0);
 
-      const entry = tileCache[key];
-      if (entry.status === 'loaded' && entry.img) {
-        image(entry.img, screenX, screenY, TILE_SIZE, TILE_SIZE);
-      } else if (entry.status === 'loading') {
-        // Placeholder while loading
-        noFill();
-        stroke(60);
-        strokeWeight(1);
-        rect(screenX, screenY, TILE_SIZE, TILE_SIZE);
-      }
+      const t = (zAvg - elevMin) / range;
+      const brightness = lerp(50, 230, t) * shade;
+
+      fill(brightness);
+      beginShape();
+      vertex(isoX(ix,     iy),     isoY(ix,     iy,     z00));
+      vertex(isoX(ix + 1, iy),     isoY(ix + 1, iy,     z10));
+      vertex(isoX(ix + 1, iy + 1), isoY(ix + 1, iy + 1, z11));
+      vertex(isoX(ix,     iy + 1), isoY(ix,     iy + 1, z01));
+      endShape(CLOSE);
     }
   }
-}
 
-function updateInfo() {
-  const lon = tileXToLon(centerX, zoom);
-  const lat = tileYToLat(centerY, zoom);
-  document.getElementById('coords').textContent =
-    `${lat.toFixed(4)}°, ${lon.toFixed(4)}°`;
-  document.getElementById('zoom-level').textContent = `zoom ${zoom}`;
-}
-
-// --- Interaction ---
-
-function mousePressed() {
-  isDragging = true;
-  dragStart = { x: mouseX, y: mouseY, cx: centerX, cy: centerY };
-}
-
-function mouseDragged() {
-  if (!isDragging) return;
-  centerX = dragStart.cx - (mouseX - dragStart.x) / TILE_SIZE;
-  centerY = dragStart.cy - (mouseY - dragStart.y) / TILE_SIZE;
-}
-
-function mouseReleased() {
-  isDragging = false;
-}
-
-function mouseWheel(e) {
-  const delta = e.delta > 0 ? -1 : 1;
-  const newZoom = constrain(zoom + delta, MIN_ZOOM, MAX_ZOOM);
-  if (newZoom === zoom) return;
-
-  // Zoom towards the mouse pointer
-  const mouseOffsetX = (mouseX - width  / 2) / TILE_SIZE;
-  const mouseOffsetY = (mouseY - height / 2) / TILE_SIZE;
-
-  const scale = Math.pow(2, newZoom - zoom);
-  centerX = (centerX + mouseOffsetX) * scale - mouseOffsetX;
-  centerY = (centerY + mouseOffsetY) * scale - mouseOffsetY;
-  zoom = newZoom;
-
-  // Evict tiles from old zoom level to keep cache lean
-  for (const key of Object.keys(tileCache)) {
-    if (!key.startsWith(`${zoom}/`)) delete tileCache[key];
-  }
-
-  return false; // prevent page scroll
+  // Info overlay
+  fill(255, 200);
+  noStroke();
+  textAlign(LEFT, BOTTOM);
+  textSize(12);
+  text(`${CENTER_LAT.toFixed(4)}°, ${CENTER_LON.toFixed(4)}° · ${RADIUS_KM}km radius · ${hN}×${hN} samples`, 12, height - 12);
 }
 
 function windowResized() {
   resizeCanvas(windowWidth, windowHeight);
-}
-
-// --- Tile coordinate math ---
-
-function lonToTileX(lon, z) {
-  return (lon + 180) / 360 * Math.pow(2, z);
-}
-
-function latToTileY(lat, z) {
-  const rad = lat * Math.PI / 180;
-  return (1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2 * Math.pow(2, z);
-}
-
-function tileXToLon(x, z) {
-  return (x / Math.pow(2, z)) * 360 - 180;
-}
-
-function tileYToLat(y, z) {
-  return Math.atan(Math.sinh(Math.PI * (1 - 2 * y / Math.pow(2, z)))) * 180 / Math.PI;
+  redraw();
 }
