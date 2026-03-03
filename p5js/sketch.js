@@ -142,24 +142,18 @@ function draw() {
   updateInfo();
 }
 
-// Late 1980s Amiga-style stepped elevation palette
-// Each row: [top rgb, right-face rgb, front-face rgb]
-const AMIGA_PALETTE = [
-  [[  0,  44, 170], [  0,  28, 120], [  0,  18,  88]],  // deep blue
-  [[  0, 220,   0], [  0, 155,   0], [  0, 115,   0]],  // bright green
-  [[255, 160,   0], [188, 112,   0], [148,  82,   0]],  // orange
-  [[255,  20, 140], [188,   8,  95], [148,   4,  68]],  // hot pink
-];
-
 // Draw one isometric bar: top + right face + front face
+// Blue at sea level, green above
 function drawBar(tx, ty, tw, th, barH, t) {
   const TL = nVertex(tx,      ty);
   const TR = nVertex(tx + tw, ty);
   const BR = nVertex(tx + tw, ty + th);
   const BL = nVertex(tx,      ty + th);
 
-  const step = min(AMIGA_PALETTE.length - 1, floor(t * AMIGA_PALETTE.length));
-  const [top, right, front] = AMIGA_PALETTE[step];
+  const isSeaLevel = (t === 0);
+  const top   = isSeaLevel ? [  0,  44, 170] : [  0, 220,   0];
+  const right = isSeaLevel ? [  0,  28, 120] : [  0, 155,   0];
+  const front = isSeaLevel ? [  0,  18,  88] : [  0, 115,   0];
 
   noStroke();
 
