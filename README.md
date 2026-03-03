@@ -41,8 +41,12 @@ This service uses **NASA Shuttle Radar Topography Mission Global 1 arc second V0
 
 Files should follow the standard naming convention (e.g. `N51W001.hgt`).
 
-### License
+### Data license
 
-Freely available with no restrictions under the [EOSDIS Data Use Policy](https://www.earthdata.nasa.gov/engage/open-data-services-and-software/data-use-policy). Use of the data requires the following citation:
+The SRTM dataset is freely available under the [EOSDIS Data Use Policy](https://www.earthdata.nasa.gov/engage/open-data-services-and-software/data-use-policy). Use requires the following citation:
 
 > NASA JPL (2013). *NASA Shuttle Radar Topography Mission Global 1 arc second* [Data set]. NASA Land Processes Distributed Active Archive Center. https://doi.org/10.5067/MEASURES/SRTM/SRTMGL1.003
+
+## License
+
+This software is released under the [MIT License](LICENSE).
