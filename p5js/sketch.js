@@ -136,25 +136,37 @@ function draw() {
   const cellTH  = areaH / GRID_H;
 
   drawSoilLayer(maxBarH);
+  drawSeaLayer();
 
   // Painter's algorithm: render back-to-front along ascending gx+gy diagonals
   for (let sum = 0; sum < GRID_W + GRID_H - 1; sum++) {
     for (let gx = max(0, sum - GRID_H + 1); gx <= min(sum, GRID_W - 1); gx++) {
       const gy   = sum - gx;
       const elev = elevGrid[gy * GRID_W + gx];
-      if (isNaN(elev)) continue;
+      if (isNaN(elev) || elev <= 0) continue;  // sea level covered by sea layer
 
-      const t    = Math.max(0, elev) / ELEV_DISPLAY_MAX;
+      const t    = elev / ELEV_DISPLAY_MAX;
       const barH = t * maxBarH;
       const tx   = tileMinX + gx / GRID_W * areaW;
       const ty   = tileMinY + gy / GRID_H * areaH;
-      drawBar(tx, ty, cellTW, cellTH, barH, t);
+      drawBar(tx, ty, cellTW, cellTH, barH);
     }
   }
 
   drawSkyLayer(maxBarH);
 
   updateInfo();
+}
+
+// Flat blue diamond at sea level (0 m) — replaces individual sea-level bars
+function drawSeaLayer() {
+  const TL = nVertex(tileMinX,         tileMinY);
+  const TR = nVertex(tileMinX + areaW, tileMinY);
+  const BR = nVertex(tileMinX + areaW, tileMinY + areaH);
+  const BL = nVertex(tileMinX,         tileMinY + areaH);
+  noStroke();
+  fill(0, 44, 170);
+  quad(TL.x, TL.y, TR.x, TR.y, BR.x, BR.y, BL.x, BL.y);
 }
 
 // Flat earthy-brown diamond dropped below ground level by the same offset as the sky
@@ -181,31 +193,20 @@ function drawSkyLayer(maxBarH) {
   quad(TL.x, TL.y - lift, TR.x, TR.y - lift, BR.x, BR.y - lift, BL.x, BL.y - lift);
 }
 
-// Draw one isometric bar: top + right face + front face
-// Blue at sea level, green above
-function drawBar(tx, ty, tw, th, barH, t) {
+// Draw one isometric bar (above sea level only): top + right face + front face
+function drawBar(tx, ty, tw, th, barH) {
   const TL = nVertex(tx,      ty);
   const TR = nVertex(tx + tw, ty);
   const BR = nVertex(tx + tw, ty + th);
   const BL = nVertex(tx,      ty + th);
 
-  const isSeaLevel = (t === 0);
-  const top   = isSeaLevel ? [  0,  44, 170] : [  0, 220,   0];
-  const right = isSeaLevel ? [  0,  28, 120] : [  0, 155,   0];
-  const front = isSeaLevel ? [  0,  18,  88] : [  0, 115,   0];
-
   noStroke();
-
-  if (barH > 0.5) {
-    fill(...right);
-    quad(TR.x, TR.y, BR.x, BR.y, BR.x, BR.y - barH, TR.x, TR.y - barH);
-
-    fill(...front);
-    quad(BL.x, BL.y, BR.x, BR.y, BR.x, BR.y - barH, BL.x, BL.y - barH);
-  }
-
-  fill(...top);
-  quad(TL.x, TL.y - barH, TR.x, TR.y - barH, BR.x, BR.y - barH, BL.x, BL.y - barH);
+  fill(0, 155, 0);
+  quad(TR.x, TR.y, BR.x, BR.y, BR.x, BR.y - barH, TR.x, TR.y - barH);  // right face
+  fill(0, 115, 0);
+  quad(BL.x, BL.y, BR.x, BR.y, BR.x, BR.y - barH, BL.x, BL.y - barH);  // front face
+  fill(0, 220, 0);
+  quad(TL.x, TL.y - barH, TR.x, TR.y - barH, BR.x, BR.y - barH, BL.x, BL.y - barH);  // top
 }
 
 // --- Interaction ---
