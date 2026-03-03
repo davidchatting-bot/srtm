@@ -132,8 +132,10 @@ function draw() {
 
   const barFootprint = (areaW / GRID_W) * cellW;  // screen px width of one bar
   const maxBarH = barFootprint * 4;
-  const cellTW     = areaW / GRID_W;
-  const cellTH     = areaH / GRID_H;
+  const cellTW  = areaW / GRID_W;
+  const cellTH  = areaH / GRID_H;
+
+  drawSoilLayer();
 
   // Painter's algorithm: render back-to-front along ascending gx+gy diagonals
   for (let sum = 0; sum < GRID_W + GRID_H - 1; sum++) {
@@ -150,7 +152,32 @@ function draw() {
     }
   }
 
+  drawSkyLayer(maxBarH);
+
   updateInfo();
+}
+
+// Flat earthy-brown diamond at ground level — the base the bars grow from
+function drawSoilLayer() {
+  const TL = nVertex(tileMinX,         tileMinY);
+  const TR = nVertex(tileMinX + areaW, tileMinY);
+  const BR = nVertex(tileMinX + areaW, tileMinY + areaH);
+  const BL = nVertex(tileMinX,         tileMinY + areaH);
+  noStroke();
+  fill(101, 58, 22);
+  quad(TL.x, TL.y, TR.x, TR.y, BR.x, BR.y, BL.x, BL.y);
+}
+
+// Semi-transparent sky-blue diamond floating above the tallest bars
+function drawSkyLayer(maxBarH) {
+  const lift = maxBarH * 1.15;
+  const TL = nVertex(tileMinX,         tileMinY);
+  const TR = nVertex(tileMinX + areaW, tileMinY);
+  const BR = nVertex(tileMinX + areaW, tileMinY + areaH);
+  const BL = nVertex(tileMinX,         tileMinY + areaH);
+  noStroke();
+  fill(40, 120, 255, 70);
+  quad(TL.x, TL.y - lift, TR.x, TR.y - lift, BR.x, BR.y - lift, BL.x, BL.y - lift);
 }
 
 // Draw one isometric bar: top + right face + front face

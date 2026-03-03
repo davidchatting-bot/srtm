@@ -14,8 +14,10 @@ A browser-based isometric bar-chart viewer for the SRTM tile server. Served auto
 
 1. **`preload()`** fetches `/info` from the server to get the native SRTM sample spacing (`pixelDeg`), then computes `GRID_W × GRID_H` so each bar in the chart maps to exactly one SRTM data point.
 2. **`ensureTilesLoaded()`** requests grayscale elevation tiles (`/tiles/z/x/y.png`) for all slippy-map tiles in the current view. Pixel data is extracted once on load via `img.loadPixels()` and cached as a `Uint8Array`.
-3. **`draw()`** samples the cached tile pixels at each grid cell, decodes the grayscale value back to metres (`pixel/255 × 9000 − 500`), then renders every cell as an isometric bar using the painter's algorithm (back-to-front along ascending `gx+gy` diagonals).
-4. Each bar has three visible faces (top, right, front) shaded at different brightnesses to give a 3-D appearance. Colour is determined by elevation: **blue at sea level, green above**.
+3. **`draw()`** samples the cached tile pixels at each grid cell, decodes the grayscale value back to metres (`pixel/255 × 9000 − 500`), then renders the scene in three layers:
+   - **Soil layer** — a flat brown diamond at ground level, drawn first so bars appear to grow out of it.
+   - **Terrain bars** — rendered back-to-front (ascending `gx+gy` diagonals). Each bar has three faces (top, right, front) at different brightnesses for a 3-D appearance. Colour: **blue at sea level, green above**.
+   - **Sky layer** — a semi-transparent blue diamond floating 15 % above the tallest possible bar, drawn last.
 
 ## Configuration
 
