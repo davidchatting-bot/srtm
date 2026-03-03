@@ -135,7 +135,7 @@ function draw() {
   const cellTW  = areaW / GRID_W;
   const cellTH  = areaH / GRID_H;
 
-  drawSoilLayer();
+  drawSoilLayer(maxBarH);
 
   // Painter's algorithm: render back-to-front along ascending gx+gy diagonals
   for (let sum = 0; sum < GRID_W + GRID_H - 1; sum++) {
@@ -157,15 +157,16 @@ function draw() {
   updateInfo();
 }
 
-// Flat earthy-brown diamond at ground level — the base the bars grow from
-function drawSoilLayer() {
+// Flat earthy-brown diamond dropped below ground level by the same offset as the sky
+function drawSoilLayer(maxBarH) {
+  const drop = maxBarH * 5.75;
   const TL = nVertex(tileMinX,         tileMinY);
   const TR = nVertex(tileMinX + areaW, tileMinY);
   const BR = nVertex(tileMinX + areaW, tileMinY + areaH);
   const BL = nVertex(tileMinX,         tileMinY + areaH);
   noStroke();
   fill(101, 58, 22);
-  quad(TL.x, TL.y, TR.x, TR.y, BR.x, BR.y, BL.x, BL.y);
+  quad(TL.x, TL.y + drop, TR.x, TR.y + drop, BR.x, BR.y + drop, BL.x, BL.y + drop);
 }
 
 // Semi-transparent sky-blue diamond floating above the tallest bars
