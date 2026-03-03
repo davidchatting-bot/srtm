@@ -159,7 +159,7 @@ function draw() {
 
 // Flat earthy-brown diamond dropped below ground level by the same offset as the sky
 function drawSoilLayer(maxBarH) {
-  const drop = maxBarH * 5.75;
+  const drop = maxBarH * 2.875;
   const TL = nVertex(tileMinX,         tileMinY);
   const TR = nVertex(tileMinX + areaW, tileMinY);
   const BR = nVertex(tileMinX + areaW, tileMinY + areaH);
@@ -171,7 +171,7 @@ function drawSoilLayer(maxBarH) {
 
 // Semi-transparent sky-blue diamond floating above the tallest bars
 function drawSkyLayer(maxBarH) {
-  const lift = maxBarH * 5.75;
+  const lift = maxBarH * 2.875;
   const TL = nVertex(tileMinX,         tileMinY);
   const TR = nVertex(tileMinX + areaW, tileMinY);
   const BR = nVertex(tileMinX + areaW, tileMinY + areaH);
