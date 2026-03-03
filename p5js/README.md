@@ -14,10 +14,11 @@ A browser-based isometric bar-chart viewer for the SRTM tile server. Served auto
 
 1. **`preload()`** fetches `/info` from the server to get the native SRTM sample spacing (`pixelDeg`), then computes `GRID_W × GRID_H` so each bar in the chart maps to exactly one SRTM data point.
 2. **`ensureTilesLoaded()`** requests grayscale elevation tiles (`/tiles/z/x/y.png`) for all slippy-map tiles in the current view. Pixel data is extracted once on load via `img.loadPixels()` and cached as a `Uint8Array`.
-3. **`draw()`** samples the cached tile pixels at each grid cell, decodes the grayscale value back to metres (`pixel/255 × 9000 − 500`), then renders the scene in three layers:
-   - **Soil layer** — a flat brown diamond at ground level, drawn first so bars appear to grow out of it.
-   - **Terrain bars** — rendered back-to-front (ascending `gx+gy` diagonals). Each bar has three faces (top, right, front) at different brightnesses for a 3-D appearance. Colour: **blue at sea level, green above**.
-   - **Sky layer** — a semi-transparent blue diamond floating 15 % above the tallest possible bar, drawn last.
+3. **`draw()`** samples the cached tile pixels at each grid cell, decodes the grayscale value back to metres (`pixel/255 × 9000 − 500`), then renders the scene in four layers (back to front):
+   - **Soil layer** — opaque brown diamond, offset `maxBarH × 2.875` below ground.
+   - **Sea layer** — opaque blue diamond at ground level (0 m). Cells at or below sea level are skipped in the bar loop; this layer covers them.
+   - **Terrain bars** — green isometric bars for cells above sea level, rendered back-to-front (ascending `gx+gy` diagonals). Each bar has three faces (top, right, front) at different brightnesses for a 3-D appearance.
+   - **Sky layer** — semi-transparent blue diamond, offset `maxBarH × 2.875` above ground.
 
 ## Configuration
 
