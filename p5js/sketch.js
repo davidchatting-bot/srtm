@@ -111,12 +111,15 @@ function draw() {
   background(15);
   ensureTilesLoaded();
 
-  // Build elevation grid
+  // Build elevation grid and find local maximum (sea level stays fixed at 0)
   const elevGrid = new Float32Array(GRID_W * GRID_H);
+  let localMax = 1;
 
   for (let gy = 0; gy < GRID_H; gy++) {
     for (let gx = 0; gx < GRID_W; gx++) {
-      elevGrid[gy * GRID_W + gx] = sampleElevation(gx, gy);
+      const e = sampleElevation(gx, gy);
+      elevGrid[gy * GRID_W + gx] = e;
+      if (!isNaN(e) && e > localMax) localMax = e;
     }
   }
 
@@ -131,7 +134,7 @@ function draw() {
       const elev = elevGrid[gy * GRID_W + gx];
       if (isNaN(elev)) continue;
 
-      const t    = Math.max(0, elev) / ELEV_DISPLAY_MAX;
+      const t    = Math.max(0, elev) / localMax;
       const barH = t * maxBarH;
       const tx   = tileMinX + gx / GRID_W * areaW;
       const ty   = tileMinY + gy / GRID_H * areaH;
