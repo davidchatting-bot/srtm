@@ -131,10 +131,11 @@ function draw() {
       const elev = elevGrid[gy * GRID_W + gx];
       if (isNaN(elev)) continue;
 
-      const barH = Math.max(0, elev) / ELEV_DISPLAY_MAX * maxBarH;
+      const t    = Math.max(0, elev) / ELEV_DISPLAY_MAX;
+      const barH = t * maxBarH;
       const tx   = tileMinX + gx / GRID_W * areaW;
       const ty   = tileMinY + gy / GRID_H * areaH;
-      drawBar(tx, ty, cellTW, cellTH, barH);
+      drawBar(tx, ty, cellTW, cellTH, barH, t);
     }
   }
 
@@ -142,7 +143,7 @@ function draw() {
 }
 
 // Draw one isometric bar: top + right face + front face
-function drawBar(tx, ty, tw, th, barH) {
+function drawBar(tx, ty, tw, th, barH, t) {
   const TL = nVertex(tx,      ty);
   const TR = nVertex(tx + tw, ty);
   const BR = nVertex(tx + tw, ty + th);
@@ -151,14 +152,17 @@ function drawBar(tx, ty, tw, th, barH) {
   noStroke();
 
   if (barH > 0.5) {
-    fill(80, 140, 180);   // right face
+    // Right (east-facing) face
+    fill(lerp(20, 80,  t), lerp(50, 140, t), lerp(80, 180, t));
     quad(TR.x, TR.y, BR.x, BR.y, BR.x, BR.y - barH, TR.x, TR.y - barH);
 
-    fill(55, 108, 145);   // front face
+    // Front (south-facing) face
+    fill(lerp(15, 55,  t), lerp(38, 108, t), lerp(65, 145, t));
     quad(BL.x, BL.y, BR.x, BR.y, BR.x, BR.y - barH, BL.x, BL.y - barH);
   }
 
-  fill(160, 215, 235);   // top face
+  // Top face
+  fill(lerp(50, 160, t), lerp(90, 215, t), lerp(90, 235, t));
   quad(TL.x, TL.y - barH, TR.x, TR.y - barH, BR.x, BR.y - barH, BL.x, BL.y - barH);
 }
 
