@@ -170,7 +170,7 @@ function drawSoilLayer() {
 
 // Semi-transparent sky-blue diamond floating above the tallest bars
 function drawSkyLayer(maxBarH) {
-  const lift = maxBarH * 1.15;
+  const lift = maxBarH * 5.75;
   const TL = nVertex(tileMinX,         tileMinY);
   const TR = nVertex(tileMinX + areaW, tileMinY);
   const BR = nVertex(tileMinX + areaW, tileMinY + areaH);
