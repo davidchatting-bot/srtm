@@ -35,6 +35,161 @@ function kmToDegreeOffsets(lat, radiusKm) {
   return { latOffset, lonOffset };
 }
 
+// Slippy tile helpers (Web Mercator / EPSG:3857)
+const TILE_SIZE = 256;
+const ELEV_MIN = -500;
+const ELEV_MAX = 8500;
+const ELEV_RANGE = ELEV_MAX - ELEV_MIN;
+
+function tileToNWCorner(x, y, z) {
+  const n = Math.pow(2, z);
+  const lon = (x / n) * 360 - 180;
+  const lat = Math.atan(Math.sinh(Math.PI * (1 - (2 * y) / n))) * (180 / Math.PI);
+  return { lon, lat };
+}
+
+function tileBounds(x, y, z) {
+  const nw = tileToNWCorner(x, y, z);
+  const se = tileToNWCorner(x + 1, y + 1, z);
+  return { minLon: nw.lon, maxLon: se.lon, minLat: se.lat, maxLat: nw.lat };
+}
+
+// Convert output pixel position to geographic lon/lat (accounts for Mercator distortion)
+function pixelToLonLat(px, py, tileX, tileY, z) {
+  const n = Math.pow(2, z);
+  const lon = ((tileX + px / TILE_SIZE) / n) * 360 - 180;
+  const lat = Math.atan(Math.sinh(Math.PI * (1 - (2 * (tileY + py / TILE_SIZE)) / n))) * (180 / Math.PI);
+  return { lon, lat };
+}
+
+// Load the overlap region of each available SRTM tile into a cache keyed by tile name
+function loadSRTMCache(minLon, minLat, maxLon, maxLat) {
+  const tileNames = getTilesForBounds(minLon, minLat, maxLon, maxLat);
+  const cache = new Map();
+
+  for (const name of tileNames) {
+    const filePath = path.join(DATA_DIR, name);
+    if (!fs.existsSync(filePath)) continue;
+
+    const ds = gdal.open(filePath);
+    const band = ds.bands.get(1);
+    const tgt = ds.geoTransform;
+    const tileWidth = band.size.x;
+    const tileHeight = band.size.y;
+
+    const tileMinLon = tgt[0];
+    const tileMaxLat = tgt[3];
+    const tileMaxLon = tileMinLon + tileWidth * tgt[1];
+    const tileMinLat = tileMaxLat + tileHeight * tgt[5];
+
+    const overlapMinLon = Math.max(minLon, tileMinLon);
+    const overlapMaxLon = Math.min(maxLon, tileMaxLon);
+    const overlapMinLat = Math.max(minLat, tileMinLat);
+    const overlapMaxLat = Math.min(maxLat, tileMaxLat);
+
+    if (overlapMinLon >= overlapMaxLon || overlapMinLat >= overlapMaxLat) {
+      ds.close();
+      continue;
+    }
+
+    const tx1 = Math.max(0, Math.floor((overlapMinLon - tgt[0]) / tgt[1]));
+    const ty1 = Math.max(0, Math.floor((overlapMaxLat - tgt[3]) / tgt[5]));
+    const tx2 = Math.min(tileWidth, Math.ceil((overlapMaxLon - tgt[0]) / tgt[1]));
+    const ty2 = Math.min(tileHeight, Math.ceil((overlapMinLat - tgt[3]) / tgt[5]));
+
+    const readWidth = tx2 - tx1;
+    const readHeight = ty2 - ty1;
+
+    if (readWidth <= 0 || readHeight <= 0) {
+      ds.close();
+      continue;
+    }
+
+    cache.set(name, {
+      data: band.pixels.read(tx1, ty1, readWidth, readHeight),
+      readWidth,
+      readHeight,
+      originLon: tgt[0] + tx1 * tgt[1],
+      originLat: tgt[3] + ty1 * tgt[5], // top-left lat (northern edge)
+      pixelWidth: tgt[1],
+      pixelHeight: Math.abs(tgt[5]),
+    });
+
+    ds.close();
+  }
+
+  return cache;
+}
+
+app.get("/tiles/:z/:x/:y.png", async (req, res) => {
+  try {
+    const z = parseInt(req.params.z);
+    const x = parseInt(req.params.x);
+    const y = parseInt(req.params.y);
+
+    if (isNaN(z) || isNaN(x) || isNaN(y)) {
+      return res.status(400).send("Invalid tile coordinates");
+    }
+
+    const { minLon, maxLon, minLat, maxLat } = tileBounds(x, y, z);
+    const cache = loadSRTMCache(minLon, minLat, maxLon, maxLat);
+
+    const png = new PNG({ width: TILE_SIZE, height: TILE_SIZE });
+
+    if (cache.size === 0) {
+      // No data — return fully transparent tile so slippy map clients handle it gracefully
+      png.data.fill(0);
+      res.setHeader("Content-Type", "image/png");
+      return png.pack().pipe(res);
+    }
+
+    // For each output pixel, inverse-project from Mercator to lon/lat and sample SRTM
+    for (let py = 0; py < TILE_SIZE; py++) {
+      for (let px = 0; px < TILE_SIZE; px++) {
+        const { lon, lat } = pixelToLonLat(px + 0.5, py + 0.5, x, y, z);
+        const cached = cache.get(lonLatToTile(lon, lat));
+
+        const idx = (py * TILE_SIZE + px) * 4;
+
+        if (!cached) {
+          png.data[idx + 3] = 0; // transparent
+          continue;
+        }
+
+        const { data, readWidth, readHeight, originLon, originLat, pixelWidth, pixelHeight } = cached;
+        const sx = Math.floor((lon - originLon) / pixelWidth);
+        const sy = Math.floor((originLat - lat) / pixelHeight);
+
+        if (sx < 0 || sx >= readWidth || sy < 0 || sy >= readHeight) {
+          png.data[idx + 3] = 0;
+          continue;
+        }
+
+        const val = data[sy * readWidth + sx];
+
+        if (val <= -32000) {
+          // SRTM nodata value
+          png.data[idx + 3] = 0;
+          continue;
+        }
+
+        const norm = Math.max(0, Math.min(255, Math.floor(((val - ELEV_MIN) / ELEV_RANGE) * 255)));
+        png.data[idx]     = norm;
+        png.data[idx + 1] = norm;
+        png.data[idx + 2] = norm;
+        png.data[idx + 3] = 255;
+      }
+    }
+
+    res.setHeader("Content-Type", "image/png");
+    png.pack().pipe(res);
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).send("Server error");
+  }
+});
+
 app.get("/terrain", async (req, res) => {
   try {
     const lon = parseFloat(req.query.lon);
