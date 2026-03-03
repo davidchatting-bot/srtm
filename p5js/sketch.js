@@ -3,7 +3,7 @@
 
 const LON       = -122.4194;
 const LAT       = 37.7749;
-const RADIUS_KM = 0.5;       // 0.5km radius = 1km × 1km total area
+const RADIUS_KM = 5;         // 5km radius = 10km × 10km total area
 const DATA_ZOOM = 14;
 const TILE_SIZE = 256;
 
