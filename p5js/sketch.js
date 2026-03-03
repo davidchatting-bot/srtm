@@ -120,7 +120,8 @@ function draw() {
     }
   }
 
-  const maxBarH = height * 0.18;
+  const barFootprint = (areaW / GRID_W) * cellW;  // screen px width of one bar
+  const maxBarH = barFootprint * 4;
   const cellTW     = areaW / GRID_W;
   const cellTH     = areaH / GRID_H;
 
