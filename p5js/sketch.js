@@ -1,104 +1,155 @@
-const CENTER_LON = -122.4194;
-const CENTER_LAT  = 37.7749;
-const RADIUS_KM   = 1;
-const SAMPLES     = 64;
+// Each slippy tile is drawn as an isometric rhombus using a 2D affine transform.
+// The image top-left (NW) maps to the rhombus N vertex, and so on.
 
-let heightmap = null;
-let hN = 0;
-let elevMin = 0;
-let elevMax = 1;
+const TILE_SIZE = 256;
+const CELL_W    = TILE_SIZE;      // rhombus width  (E–W span)
+const CELL_H    = CELL_W / 2;     // rhombus height (N–S span)
+const MIN_ZOOM  = 5;
+const MAX_ZOOM  = 16;
+
+let zoom    = 13;
+let centerX;                       // fractional tile X of screen centre
+let centerY;                       // fractional tile Y of screen centre
+let tileCache  = {};
+let isDragging = false;
 
 function setup() {
-  createCanvas(windowWidth, windowHeight);
-  noLoop();
-  fetchHeightmap();
-}
+  const canvas = createCanvas(windowWidth, windowHeight);
+  canvas.parent('map');
 
-function fetchHeightmap() {
-  fetch(`/heightmap?lon=${CENTER_LON}&lat=${CENTER_LAT}&radius=${RADIUS_KM}&samples=${SAMPLES}`)
-    .then(r => r.json())
-    .then(d => {
-      hN = d.samples;
-      heightmap = d.data;
-      elevMin = Infinity;
-      elevMax = -Infinity;
-      for (const v of heightmap) {
-        if (v < elevMin) elevMin = v;
-        if (v > elevMax) elevMax = v;
-      }
-      redraw();
-    });
-}
-
-function getElev(ix, iy) {
-  if (!heightmap || ix < 0 || ix >= hN || iy < 0 || iy >= hN) return elevMin;
-  return heightmap[iy * hN + ix];
+  // San Francisco
+  centerX = lonToTileX(-122.4194, zoom);
+  centerY = latToTileY(37.7749,   zoom);
 }
 
 function draw() {
-  background(15);
+  background(20);
+  drawTiles();
+  updateInfo();
+}
 
-  if (!heightmap) {
-    fill(180);
-    noStroke();
-    textAlign(CENTER, CENTER);
-    textSize(16);
-    text('Loading...', width / 2, height / 2);
-    return;
-  }
+// Screen position of the N vertex (= NW corner of tile) for tile (tx, ty)
+function tileNVertex(tx, ty) {
+  const dx = tx - centerX;
+  const dy = ty - centerY;
+  return {
+    x: width  / 2 + (dx - dy) * CELL_W / 2,
+    y: height / 2 + (dx + dy) * CELL_H / 2,
+  };
+}
 
-  const range     = elevMax - elevMin || 1;
-  const cellW     = min(width * 0.95, height * 1.9) / (hN - 1);
-  const cellH     = cellW / 2;
-  const elevScale = cellH * 6 / range; // total elev range = 6 cell heights
-  const cx        = width  / 2;
-  const cy        = height * 0.6;
+function drawTiles() {
+  const maxTile    = Math.pow(2, zoom);
+  const viewRadius = ceil((width + height) / CELL_H) + 2;
 
-  // Precompute iso X (doesn't depend on elevation)
-  const isoX = (ix, iy) => cx + (ix - iy) * cellW / 2;
-  const isoY = (ix, iy, z) => cy + (ix + iy - hN + 1) * cellH / 2 - (z - elevMin) * elevScale;
+  const cx0 = floor(centerX) - viewRadius;
+  const cx1 = ceil(centerX)  + viewRadius;
+  const cy0 = floor(centerY) - viewRadius;
+  const cy1 = ceil(centerY)  + viewRadius;
 
-  noStroke();
+  // Painter's algorithm: draw ascending (tx + ty) so back tiles render first
+  for (let sum = cx0 + cy0; sum <= cx1 + cy1; sum++) {
+    for (let tx = cx0; tx <= cx1; tx++) {
+      const ty = sum - tx;
+      if (ty < cy0 || ty > cy1) continue;
+      if (ty < 0   || ty >= maxTile) continue;
 
-  // Painter's algorithm: draw diagonal strips back to front
-  for (let d = 0; d < 2 * (hN - 1); d++) {
-    for (let ix = 0; ix < hN - 1; ix++) {
-      const iy = d - ix;
-      if (iy < 0 || iy >= hN - 1) continue;
+      const { x: nx, y: ny } = tileNVertex(tx, ty);
 
-      const z00 = getElev(ix,     iy);
-      const z10 = getElev(ix + 1, iy);
-      const z11 = getElev(ix + 1, iy + 1);
-      const z01 = getElev(ix,     iy + 1);
-      const zAvg = (z00 + z10 + z11 + z01) / 4;
+      // Cull: rhombus spans [nx-CW/2 .. nx+CW/2] × [ny .. ny+CH]
+      if (nx + CELL_W / 2 < 0 || nx - CELL_W / 2 > width)  continue;
+      if (ny + CELL_H     < 0 || ny               > height) continue;
 
-      // Hillshading: finite difference slope, light from upper-left
-      const dzdx = (z10 + z11 - z00 - z01) / 2;
-      const dzdy = (z01 + z11 - z00 - z10) / 2;
-      const shade = constrain(0.6 + (dzdx - dzdy) / range, 0.15, 1.0);
+      const wrappedTx = ((tx % maxTile) + maxTile) % maxTile;
+      const key       = `${zoom}/${wrappedTx}/${ty}`;
 
-      const t = (zAvg - elevMin) / range;
-      const brightness = lerp(50, 230, t) * shade;
+      if (!tileCache[key]) {
+        tileCache[key] = { img: null, status: 'loading' };
+        loadImage(
+          `/tiles/${zoom}/${wrappedTx}/${ty}.png`,
+          img => { tileCache[key] = { img, status: 'loaded' }; },
+          ()  => { tileCache[key] = { img: null, status: 'error' };  }
+        );
+      }
 
-      fill(brightness);
-      beginShape();
-      vertex(isoX(ix,     iy),     isoY(ix,     iy,     z00));
-      vertex(isoX(ix + 1, iy),     isoY(ix + 1, iy,     z10));
-      vertex(isoX(ix + 1, iy + 1), isoY(ix + 1, iy + 1, z11));
-      vertex(isoX(ix,     iy + 1), isoY(ix,     iy + 1, z01));
-      endShape(CLOSE);
+      const entry = tileCache[key];
+      if (entry.status !== 'loaded' || !entry.img) continue;
+
+      // Affine transform mapping image space → isometric rhombus:
+      //   image (0,0)          → screen N vertex  (nx, ny)
+      //   image (TILE_SIZE, 0) → screen E vertex  (nx + CW/2, ny + CH/2)
+      //   image (0, TILE_SIZE) → screen W vertex  (nx - CW/2, ny + CH/2)
+      //   image (TILE_SIZE, TILE_SIZE) → screen S vertex (nx, ny + CH)
+      //
+      // Matrix: new_x = 0.5*x - 0.5*y + nx
+      //         new_y = 0.25*x + 0.25*y + ny
+      // applyMatrix(a, b, c, d, e, f) → new_x = a*x + c*y + e
+      //                                  new_y = b*x + d*y + f
+      push();
+      applyMatrix(0.5, 0.25, -0.5, 0.25, nx, ny);
+      image(entry.img, 0, 0, TILE_SIZE, TILE_SIZE);
+      pop();
     }
   }
+}
 
-  // Info overlay
-  fill(255, 200);
-  noStroke();
-  textAlign(LEFT, BOTTOM);
-  textSize(12);
-  text(`${CENTER_LAT.toFixed(4)}°, ${CENTER_LON.toFixed(4)}° · ${RADIUS_KM}km radius · ${hN}×${hN} samples`, 12, height - 12);
+function updateInfo() {
+  const lon = tileXToLon(centerX, zoom);
+  const lat = tileYToLat(centerY, zoom);
+  document.getElementById('coords').textContent =
+    `${lat.toFixed(4)}°, ${lon.toFixed(4)}°`;
+  document.getElementById('zoom-level').textContent = `zoom ${zoom}`;
+}
+
+// --- Interaction ---
+
+function mousePressed()  { isDragging = true; }
+function mouseReleased() { isDragging = false; }
+
+function mouseDragged() {
+  if (!isDragging) return;
+  const dMX = mouseX - pmouseX;
+  const dMY = mouseY - pmouseY;
+  // Inverse of the isometric projection to get tile-space delta
+  centerX -= (dMX + 2 * dMY) / CELL_W;
+  centerY += (dMX - 2 * dMY) / CELL_W;
+}
+
+function mouseWheel(e) {
+  const delta   = e.delta > 0 ? -1 : 1;
+  const newZoom = constrain(zoom + delta, MIN_ZOOM, MAX_ZOOM);
+  if (newZoom === zoom) return false;
+
+  const scale = Math.pow(2, newZoom - zoom);
+  centerX *= scale;
+  centerY *= scale;
+  zoom = newZoom;
+
+  for (const key of Object.keys(tileCache)) {
+    if (!key.startsWith(`${zoom}/`)) delete tileCache[key];
+  }
+  return false;
 }
 
 function windowResized() {
   resizeCanvas(windowWidth, windowHeight);
-  redraw();
+}
+
+// --- Tile coordinate math ---
+
+function lonToTileX(lon, z) {
+  return (lon + 180) / 360 * Math.pow(2, z);
+}
+
+function latToTileY(lat, z) {
+  const rad = lat * Math.PI / 180;
+  return (1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2 * Math.pow(2, z);
+}
+
+function tileXToLon(x, z) {
+  return (x / Math.pow(2, z)) * 360 - 180;
+}
+
+function tileYToLat(y, z) {
+  return Math.atan(Math.sinh(Math.PI * (1 - 2 * y / Math.pow(2, z)))) * 180 / Math.PI;
 }
