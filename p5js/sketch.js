@@ -6,7 +6,7 @@
 
 const LON_DEFAULT      = -1.6;
 const LAT_DEFAULT      = 55.0;
-const RADIUS_KM        = 20;        // 40 km total view
+const RADIUS_KM        = 5;         // 10 km total view
 let DATA_ZOOM          = 11;        // computed in preload() to match SRTM resolution
 const TILE_SIZE        = 256;       // pixels per tile (matches server)
 const ELEV_MIN         = -500;      // must match server ELEV_MIN
