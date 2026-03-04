@@ -52,7 +52,7 @@ function computeLayout() {
   areaW = lonToTileX(LON + lonOffset, DATA_ZOOM) - lonToTileX(LON - lonOffset, DATA_ZOOM);
   areaH = latToTileY(LAT - latOffset, DATA_ZOOM) - latToTileY(LAT + latOffset, DATA_ZOOM);
 
-  const fitW = min(width * 0.85, height * 1.7);
+  const fitW = min(width * 0.85, height * 1.7) / 3;
   cellW = fitW / areaW;
   cellH = cellW / 2;
 }
