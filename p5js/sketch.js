@@ -5,7 +5,7 @@
 // the top of the colour scale; anything higher is clamped.
 
 const LON_DEFAULT      = -1.6;
-const LAT_DEFAULT      = 56.0;
+const LAT_DEFAULT      = 55.0;
 const RADIUS_KM        = 20;        // 40 km total view
 let DATA_ZOOM          = 11;        // computed in preload() to match SRTM resolution
 const TILE_SIZE        = 256;       // pixels per tile (matches server)
