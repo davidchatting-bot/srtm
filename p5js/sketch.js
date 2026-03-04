@@ -64,7 +64,7 @@ function goToLocation(event) {
 }
 
 function computeLayout() {
-  const lonOffset = RADIUS_KM / (111.32 * Math.cos(LAT * Math.PI / 180));
+  const lonOffset = RADIUS_KM / (111.32 * Math.cos(LAT_DEFAULT * Math.PI / 180));
   const latOffset = RADIUS_KM / 111.32;
 
   areaW = lonToTileX(LON_DEFAULT + lonOffset, DATA_ZOOM) - lonToTileX(LON_DEFAULT - lonOffset, DATA_ZOOM);
