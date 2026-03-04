@@ -56,6 +56,7 @@ function setup() {
   document.getElementById('lat-input').value = lat;
 
   computeLayout();
+  requestMissingTiles();
   noLoop();
   redraw();
 }
@@ -69,6 +70,7 @@ function goToLocation(event) {
   centerX  = lonToTileX(lon, DATA_ZOOM);
   centerY  = latToTileY(lat, DATA_ZOOM);
   tileCache = {};
+  requestMissingTiles();
   redraw();
 }
 
@@ -94,11 +96,16 @@ function nVertex(tx, ty) {
   };
 }
 
-// Kick off loads for all tiles in view; cache pixel data on arrival
-function ensureTilesLoaded() {
+// Update tileMinX/Y from current centre — called at the start of every draw()
+function updateTileBounds() {
   tileMinX = centerX - areaW / 2;
   tileMinY = centerY - areaH / 2;
+}
 
+// Request any tiles in the current view that aren't already cached.
+// Called only when the view changes (drag, location change, setup) — never from draw().
+function requestMissingTiles() {
+  updateTileBounds();
   const tx0 = Math.floor(tileMinX);
   const tx1 = Math.ceil(centerX + areaW / 2);
   const ty0 = Math.floor(tileMinY);
@@ -110,7 +117,7 @@ function ensureTilesLoaded() {
       if (ty < 0 || ty >= maxTile) continue;
       const wtx = ((tx % maxTile) + maxTile) % maxTile;
       const key = `${DATA_ZOOM}/${wtx}/${ty}`;
-      if (tileCache[key]) continue;
+      if (tileCache[key]) continue;  // already loading, loaded, or errored
 
       tileCache[key] = { pixels: null, status: 'loading' };
       loadImage(
@@ -147,7 +154,7 @@ function sampleElevation(gx, gy) {
 
 function draw() {
   background(15);
-  ensureTilesLoaded();
+  updateTileBounds();
 
   // Build elevation grid
   const elevGrid = new Float32Array(GRID_W * GRID_H);
@@ -248,6 +255,7 @@ function mouseDragged() {
   const dMY = mouseY - pmouseY;
   centerX -= (dMX + 2 * dMY) / cellW;
   centerY += (dMX - 2 * dMY) / cellW;
+  requestMissingTiles();
   redraw();
 }
 
