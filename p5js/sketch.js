@@ -52,7 +52,7 @@ function computeLayout() {
   areaW = lonToTileX(LON + lonOffset, DATA_ZOOM) - lonToTileX(LON - lonOffset, DATA_ZOOM);
   areaH = latToTileY(LAT - latOffset, DATA_ZOOM) - latToTileY(LAT + latOffset, DATA_ZOOM);
 
-  const fitW = min(width * 0.85, height * 1.7) / 3;
+  const fitW = min(width * 0.85, height * 1.7) / 2;
   cellW = fitW / areaW;
   cellH = cellW / 2;
 }
@@ -171,7 +171,7 @@ function drawSeaLayer() {
 
 // Flat earthy-brown diamond dropped below ground level by the same offset as the sky
 function drawSoilLayer(maxBarH) {
-  const drop = maxBarH * 2.875;
+  const drop = maxBarH * 5.75;
   const TL = nVertex(tileMinX,         tileMinY);
   const TR = nVertex(tileMinX + areaW, tileMinY);
   const BR = nVertex(tileMinX + areaW, tileMinY + areaH);
@@ -183,7 +183,7 @@ function drawSoilLayer(maxBarH) {
 
 // Semi-transparent sky-blue diamond floating above the tallest bars
 function drawSkyLayer(maxBarH) {
-  const lift = maxBarH * 2.875;
+  const lift = maxBarH * 5.75;
   const TL = nVertex(tileMinX,         tileMinY);
   const TR = nVertex(tileMinX + areaW, tileMinY);
   const BR = nVertex(tileMinX + areaW, tileMinY + areaH);
