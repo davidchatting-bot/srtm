@@ -4,8 +4,8 @@
 // ELEV_DISPLAY_MAX sets the elevation (metres above sea level) that reaches
 // the top of the colour scale; anything higher is clamped.
 
-const LON_DEFAULT      = -122.4194; // San Francisco
-const LAT_DEFAULT      = 37.7749;
+const LON_DEFAULT      = -1.6;
+const LAT_DEFAULT      = 56.0;
 const RADIUS_KM        = 20;        // 40 km total view
 let DATA_ZOOM          = 11;        // computed in preload() to match SRTM resolution
 const TILE_SIZE        = 256;       // pixels per tile (matches server)
