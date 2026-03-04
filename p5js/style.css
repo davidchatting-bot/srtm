@@ -39,3 +39,37 @@ html, body {
   border-radius: 4px;
   pointer-events: none;
 }
+
+#location-form {
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  display: flex;
+  gap: 6px;
+}
+
+#location-form input {
+  background: rgba(0, 0, 0, 0.7);
+  border: 1px solid #444;
+  color: #fff;
+  font-family: monospace;
+  font-size: 12px;
+  padding: 5px 8px;
+  border-radius: 4px;
+  width: 120px;
+}
+
+#location-form button {
+  background: rgba(0, 0, 0, 0.7);
+  border: 1px solid #444;
+  color: #fff;
+  font-family: monospace;
+  font-size: 12px;
+  padding: 5px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+#location-form button:hover {
+  background: rgba(255, 255, 255, 0.1);
+}

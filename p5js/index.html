@@ -12,6 +12,11 @@
     <span id="coords"></span>
     <span id="zoom-level"></span>
   </div>
+  <form id="location-form" onsubmit="goToLocation(event)">
+    <input id="lat-input" type="number" step="any" placeholder="Latitude" required>
+    <input id="lon-input" type="number" step="any" placeholder="Longitude" required>
+    <button type="submit">Go</button>
+  </form>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.4/p5.min.js"></script>
   <script src="sketch.js"></script>
 </body>

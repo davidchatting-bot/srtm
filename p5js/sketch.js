@@ -4,8 +4,8 @@
 // ELEV_DISPLAY_MAX sets the elevation (metres above sea level) that reaches
 // the top of the colour scale; anything higher is clamped.
 
-const LON              = -122.4194; // San Francisco
-const LAT              = 37.7749;
+const LON_DEFAULT      = -122.4194; // San Francisco
+const LAT_DEFAULT      = 37.7749;
 const RADIUS_KM        = 5;         // 10 km total view
 const DATA_ZOOM        = 14;        // slippy-map zoom level used for tile requests
 const TILE_SIZE        = 256;       // pixels per tile (matches server)
@@ -28,7 +28,7 @@ let GRID_H = 100;       // bars deep
 // so each bar maps to one native SRTM sample (90 m for SRTM3, 30 m for SRTM1).
 function preload() {
   loadJSON('/info', info => {
-    const lonSpan = 2 * RADIUS_KM / (111.32 * Math.cos(LAT * Math.PI / 180));
+    const lonSpan = 2 * RADIUS_KM / (111.32 * Math.cos(LAT_DEFAULT * Math.PI / 180));
     const latSpan = 2 * RADIUS_KM / 111.32;
     GRID_W = Math.round(lonSpan / info.pixelDeg);
     GRID_H = Math.round(latSpan / info.pixelDeg);
@@ -37,20 +37,38 @@ function preload() {
 
 function setup() {
   createCanvas(windowWidth, windowHeight).parent('map');
+
+  // Initialise centre from URL params (?lat=…&lon=…) or fall back to defaults
+  const params = new URLSearchParams(window.location.search);
+  const lon = parseFloat(params.get('lon')) || LON_DEFAULT;
+  const lat = parseFloat(params.get('lat')) || LAT_DEFAULT;
+  centerX = lonToTileX(lon, DATA_ZOOM);
+  centerY = latToTileY(lat, DATA_ZOOM);
+
+  // Pre-fill the form
+  document.getElementById('lon-input').value = lon;
+  document.getElementById('lat-input').value = lat;
+
   computeLayout();
+}
+
+// Called by the location form — recentres the map without a page reload
+function goToLocation(event) {
+  event.preventDefault();
+  const lon = parseFloat(document.getElementById('lon-input').value);
+  const lat = parseFloat(document.getElementById('lat-input').value);
+  if (isNaN(lon) || isNaN(lat)) return;
+  centerX  = lonToTileX(lon, DATA_ZOOM);
+  centerY  = latToTileY(lat, DATA_ZOOM);
+  tileCache = {};
 }
 
 function computeLayout() {
   const lonOffset = RADIUS_KM / (111.32 * Math.cos(LAT * Math.PI / 180));
   const latOffset = RADIUS_KM / 111.32;
 
-  if (!centerX) {
-    centerX = lonToTileX(LON, DATA_ZOOM);
-    centerY = latToTileY(LAT, DATA_ZOOM);
-  }
-
-  areaW = lonToTileX(LON + lonOffset, DATA_ZOOM) - lonToTileX(LON - lonOffset, DATA_ZOOM);
-  areaH = latToTileY(LAT - latOffset, DATA_ZOOM) - latToTileY(LAT + latOffset, DATA_ZOOM);
+  areaW = lonToTileX(LON_DEFAULT + lonOffset, DATA_ZOOM) - lonToTileX(LON_DEFAULT - lonOffset, DATA_ZOOM);
+  areaH = latToTileY(LAT_DEFAULT - latOffset, DATA_ZOOM) - latToTileY(LAT_DEFAULT + latOffset, DATA_ZOOM);
 
   const fitW = min(width * 0.85, height * 1.7) / 2;
   cellW = fitW / areaW;
