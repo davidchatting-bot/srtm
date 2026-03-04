@@ -7,7 +7,7 @@
 const LON_DEFAULT      = -122.4194; // San Francisco
 const LAT_DEFAULT      = 37.7749;
 const RADIUS_KM        = 20;        // 40 km total view
-const DATA_ZOOM        = 14;        // slippy-map zoom level used for tile requests
+let DATA_ZOOM          = 11;        // computed in preload() to match SRTM resolution
 const TILE_SIZE        = 256;       // pixels per tile (matches server)
 const ELEV_MIN         = -500;      // must match server ELEV_MIN
 const ELEV_RANGE       = 9000;      // must match server ELEV_RANGE
@@ -30,8 +30,10 @@ function preload() {
   loadJSON('/info', info => {
     const lonSpan = 2 * RADIUS_KM / (111.32 * Math.cos(LAT_DEFAULT * Math.PI / 180));
     const latSpan = 2 * RADIUS_KM / 111.32;
-    GRID_W = Math.round(lonSpan / info.pixelDeg);
-    GRID_H = Math.round(latSpan / info.pixelDeg);
+    GRID_W    = Math.round(lonSpan / info.pixelDeg);
+    GRID_H    = Math.round(latSpan / info.pixelDeg);
+    // Zoom level where one tile pixel ≈ one SRTM sample
+    DATA_ZOOM = Math.round(Math.log2(360 / (TILE_SIZE * info.pixelDeg)));
   });
 }
 
