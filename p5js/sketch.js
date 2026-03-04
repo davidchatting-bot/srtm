@@ -135,9 +135,9 @@ function requestMissingTiles() {
 }
 
 // Sample elevation (metres) at grid cell centre; returns NaN if no data
-function sampleElevation(gx, gy) {
-  const tx = tileMinX + (gx + 0.5) / GRID_W * areaW;
-  const ty = tileMinY + (gy + 0.5) / GRID_H * areaH;
+function sampleElevation(gx, gy, gW, gH) {
+  const tx = tileMinX + (gx + 0.5) / gW * areaW;
+  const ty = tileMinY + (gy + 0.5) / gH * areaH;
   const itx = Math.floor(tx);
   const ity = Math.floor(ty);
   const px  = Math.min(TILE_SIZE - 1, Math.floor((tx - itx) * TILE_SIZE));
@@ -157,34 +157,38 @@ function draw() {
   background(15);
   updateTileBounds();
 
-  // Build elevation grid
-  const elevGrid = new Float32Array(GRID_W * GRID_H);
+  // Use a coarser grid while dragging for faster redraws
+  const gW = isDragging ? max(20, floor(GRID_W / 4)) : GRID_W;
+  const gH = isDragging ? max(20, floor(GRID_H / 4)) : GRID_H;
 
-  for (let gy = 0; gy < GRID_H; gy++) {
-    for (let gx = 0; gx < GRID_W; gx++) {
-      elevGrid[gy * GRID_W + gx] = sampleElevation(gx, gy);
+  // Build elevation grid
+  const elevGrid = new Float32Array(gW * gH);
+
+  for (let gy = 0; gy < gH; gy++) {
+    for (let gx = 0; gx < gW; gx++) {
+      elevGrid[gy * gW + gx] = sampleElevation(gx, gy, gW, gH);
     }
   }
 
-  const barFootprint = (areaW / GRID_W) * cellW;  // screen px width of one bar
+  const barFootprint = (areaW / gW) * cellW;  // screen px width of one bar
   const maxBarH = barFootprint * 4;
-  const cellTW  = areaW / GRID_W;
-  const cellTH  = areaH / GRID_H;
+  const cellTW  = areaW / gW;
+  const cellTH  = areaH / gH;
 
   drawSoilLayer(maxBarH);
   drawSeaLayer();
 
   // Painter's algorithm: render back-to-front along ascending gx+gy diagonals
-  for (let sum = 0; sum < GRID_W + GRID_H - 1; sum++) {
-    for (let gx = max(0, sum - GRID_H + 1); gx <= min(sum, GRID_W - 1); gx++) {
+  for (let sum = 0; sum < gW + gH - 1; sum++) {
+    for (let gx = max(0, sum - gH + 1); gx <= min(sum, gW - 1); gx++) {
       const gy   = sum - gx;
-      const elev = elevGrid[gy * GRID_W + gx];
-      if (isNaN(elev) || elev <= 0) continue;  // sea level covered by sea layer
+      const elev = elevGrid[gy * gW + gx];
+      if (isNaN(elev) || elev <= 0) continue;
 
       const t    = elev / ELEV_DISPLAY_MAX;
       const barH = t * maxBarH;
-      const tx   = tileMinX + gx / GRID_W * areaW;
-      const ty   = tileMinY + gy / GRID_H * areaH;
+      const tx   = tileMinX + gx / gW * areaW;
+      const ty   = tileMinY + gy / gH * areaH;
       drawBar(tx, ty, cellTW, cellTH, barH);
     }
   }
@@ -256,7 +260,7 @@ function mousePressed() {
 function mouseReleased() {
   isDragging = false;
   requestMissingTiles();
-  redraw();
+  redraw();  // redraws at full resolution now isDragging is false
 }
 
 function mouseDragged() {
