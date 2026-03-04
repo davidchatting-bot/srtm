@@ -22,6 +22,7 @@ let cellW, cellH;       // screen pixels per tile unit (cellH = cellW/2 for 2:1 
 let tileMinX, tileMinY; // top-left corner of the view in tile coordinates
 let tileCache = {};     // keyed by "z/x/y"; stores { pixels, status }
 let isDragging = false;
+let lastDragX, lastDragY;
 let GRID_W = 100;       // bars across — computed in setup() from /info pixelDeg
 let GRID_H = 100;       // bars deep
 
@@ -246,17 +247,24 @@ function drawBar(tx, ty, tw, th, barH) {
 
 // --- Interaction ---
 
-function mousePressed()  { isDragging = true; }
+function mousePressed() {
+  isDragging = true;
+  lastDragX = mouseX;
+  lastDragY = mouseY;
+}
+
 function mouseReleased() {
   isDragging = false;
-  requestMissingTiles();  // fetch tiles for final position once drag ends
+  requestMissingTiles();
   redraw();
 }
 
 function mouseDragged() {
   if (!isDragging) return;
-  const dMX = mouseX - pmouseX;
-  const dMY = mouseY - pmouseY;
+  const dMX = mouseX - lastDragX;
+  const dMY = mouseY - lastDragY;
+  lastDragX = mouseX;
+  lastDragY = mouseY;
   centerX -= (dMX + 2 * dMY) / cellW;
   centerY += (dMX - 2 * dMY) / cellW;
   redraw();
