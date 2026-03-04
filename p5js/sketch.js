@@ -12,6 +12,7 @@ const TILE_SIZE        = 256;       // pixels per tile (matches server)
 const ELEV_MIN         = -500;      // must match server ELEV_MIN
 const ELEV_RANGE       = 9000;      // must match server ELEV_RANGE
 const ELEV_DISPLAY_MAX = 300;       // metres at which the colour scale tops out
+const MAX_BARS         = 120;       // max bars per axis — caps draw cost for large views
 
 // --- State ---
 
@@ -37,8 +38,8 @@ function setup() {
   const pixelDeg = _srtmInfo.pixelDeg;
   const lonSpan  = 2 * RADIUS_KM / (111.32 * Math.cos(LAT_DEFAULT * Math.PI / 180));
   const latSpan  = 2 * RADIUS_KM / 111.32;
-  GRID_W    = Math.round(lonSpan / pixelDeg);
-  GRID_H    = Math.round(latSpan / pixelDeg);
+  GRID_W    = Math.min(MAX_BARS, Math.round(lonSpan / pixelDeg));
+  GRID_H    = Math.min(MAX_BARS, Math.round(latSpan / pixelDeg));
   DATA_ZOOM = Math.round(Math.log2(360 / (TILE_SIZE * pixelDeg)));
 
   createCanvas(windowWidth, windowHeight).parent('map');
@@ -55,6 +56,8 @@ function setup() {
   document.getElementById('lat-input').value = lat;
 
   computeLayout();
+  noLoop();
+  redraw();
 }
 
 // Called by the location form — recentres the map without a page reload
@@ -66,6 +69,7 @@ function goToLocation(event) {
   centerX  = lonToTileX(lon, DATA_ZOOM);
   centerY  = latToTileY(lat, DATA_ZOOM);
   tileCache = {};
+  redraw();
 }
 
 function computeLayout() {
@@ -114,6 +118,7 @@ function ensureTilesLoaded() {
         img => {
           img.loadPixels();
           tileCache[key] = { pixels: new Uint8Array(img.pixels), status: 'loaded' };
+          redraw();
         },
         () => { tileCache[key] = { pixels: null, status: 'error' }; }
       );
@@ -243,11 +248,13 @@ function mouseDragged() {
   const dMY = mouseY - pmouseY;
   centerX -= (dMX + 2 * dMY) / cellW;
   centerY += (dMX - 2 * dMY) / cellW;
+  redraw();
 }
 
 function windowResized() {
   resizeCanvas(windowWidth, windowHeight);
   computeLayout();
+  redraw();
 }
 
 function updateInfo() {
