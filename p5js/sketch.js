@@ -21,23 +21,26 @@ let cellW, cellH;       // screen pixels per tile unit (cellH = cellW/2 for 2:1 
 let tileMinX, tileMinY; // top-left corner of the view in tile coordinates
 let tileCache = {};     // keyed by "z/x/y"; stores { pixels, status }
 let isDragging = false;
-let GRID_W = 100;       // bars across — set in preload() from /info pixelDeg
+let GRID_W = 100;       // bars across — computed in setup() from /info pixelDeg
 let GRID_H = 100;       // bars deep
 
-// Fetch SRTM data resolution from the server and compute the bar grid size
-// so each bar maps to one native SRTM sample (90 m for SRTM3, 30 m for SRTM1).
+let _srtmInfo;  // loaded in preload(), consumed in setup()
+
+// p5.js preload: use the return value (not a callback) so setup() is
+// guaranteed to block until the data is available.
 function preload() {
-  loadJSON('/info', info => {
-    const lonSpan = 2 * RADIUS_KM / (111.32 * Math.cos(LAT_DEFAULT * Math.PI / 180));
-    const latSpan = 2 * RADIUS_KM / 111.32;
-    GRID_W    = Math.round(lonSpan / info.pixelDeg);
-    GRID_H    = Math.round(latSpan / info.pixelDeg);
-    // Zoom level where one tile pixel ≈ one SRTM sample
-    DATA_ZOOM = Math.round(Math.log2(360 / (TILE_SIZE * info.pixelDeg)));
-  });
+  _srtmInfo = loadJSON('/info');
 }
 
 function setup() {
+  // Compute grid size and tile zoom from SRTM resolution now that _srtmInfo is ready
+  const pixelDeg = _srtmInfo.pixelDeg;
+  const lonSpan  = 2 * RADIUS_KM / (111.32 * Math.cos(LAT_DEFAULT * Math.PI / 180));
+  const latSpan  = 2 * RADIUS_KM / 111.32;
+  GRID_W    = Math.round(lonSpan / pixelDeg);
+  GRID_H    = Math.round(latSpan / pixelDeg);
+  DATA_ZOOM = Math.round(Math.log2(360 / (TILE_SIZE * pixelDeg)));
+
   createCanvas(windowWidth, windowHeight).parent('map');
 
   // Initialise centre from URL params (?lat=…&lon=…) or fall back to defaults
