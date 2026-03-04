@@ -6,7 +6,7 @@
 
 const LON_DEFAULT      = -122.4194; // San Francisco
 const LAT_DEFAULT      = 37.7749;
-const RADIUS_KM        = 5;         // 10 km total view
+const RADIUS_KM        = 20;        // 40 km total view
 const DATA_ZOOM        = 14;        // slippy-map zoom level used for tile requests
 const TILE_SIZE        = 256;       // pixels per tile (matches server)
 const ELEV_MIN         = -500;      // must match server ELEV_MIN
