@@ -247,7 +247,11 @@ function drawBar(tx, ty, tw, th, barH) {
 // --- Interaction ---
 
 function mousePressed()  { isDragging = true; }
-function mouseReleased() { isDragging = false; }
+function mouseReleased() {
+  isDragging = false;
+  requestMissingTiles();  // fetch tiles for final position once drag ends
+  redraw();
+}
 
 function mouseDragged() {
   if (!isDragging) return;
@@ -255,7 +259,6 @@ function mouseDragged() {
   const dMY = mouseY - pmouseY;
   centerX -= (dMX + 2 * dMY) / cellW;
   centerY += (dMX - 2 * dMY) / cellW;
-  requestMissingTiles();
   redraw();
 }
 
