@@ -13,6 +13,20 @@ node script.js
 
 The server runs on port 3000.
 
+## Running as a service
+
+A systemd unit file is included. Install it with:
+
+```bash
+sudo cp srtm.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now srtm
+```
+
+## Elevation encoding
+
+Tiles use 16-bit precision encoded across the R and G channels (`R << 8 | G`) over a fixed range of −500 m to 8500 m. The viewer decodes this as `(v16 / 65535) * 9000 − 500`.
+
 ## Viewer
 
 Open `http://localhost:3000` in a browser to see an isometric bar-chart of the terrain centred on San Francisco. Each bar represents one SRTM sample (~90 m for SRTM3, ~30 m for SRTM1). Bar height is proportional to elevation above sea level; colour is fixed: blue at sea level, green above. Drag to pan.

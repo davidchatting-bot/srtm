@@ -6,7 +6,7 @@
 
 const LON_DEFAULT      = -1.6;
 const LAT_DEFAULT      = 55.0;
-const RADIUS_KM        = 5;         // 10 km total view
+const RADIUS_KM        = 2.5;       // 5 km total view
 let DATA_ZOOM          = 11;        // computed in preload() to match SRTM resolution
 const TILE_SIZE        = 256;       // pixels per tile (matches server)
 const ELEV_MIN         = -500;      // must match server ELEV_MIN
@@ -150,16 +150,18 @@ function sampleElevation(gx, gy, gW, gH) {
 
   const idx = (py * TILE_SIZE + px) * 4;
   if (entry.pixels[idx + 3] < 128) return NaN;
-  return (entry.pixels[idx] / 255) * ELEV_RANGE + ELEV_MIN;
+  const v16 = (entry.pixels[idx] << 8) | entry.pixels[idx + 1];
+  return (v16 / 65535) * ELEV_RANGE + ELEV_MIN;
 }
 
 function draw() {
   background(15);
   updateTileBounds();
 
-  // Use a coarser grid while dragging for faster redraws
-  const gW = isDragging ? max(20, floor(GRID_W / 4)) : GRID_W;
-  const gH = isDragging ? max(20, floor(GRID_H / 4)) : GRID_H;
+  // LOD during drag: only coarsen if the grid is large enough to need it
+  const lodDivisor = max(1, floor(GRID_W / 20));
+  const gW = isDragging ? max(20, floor(GRID_W / lodDivisor)) : GRID_W;
+  const gH = isDragging ? max(20, floor(GRID_H / lodDivisor)) : GRID_H;
 
   // Build elevation grid
   const elevGrid = new Float32Array(gW * gH);
@@ -170,12 +172,13 @@ function draw() {
     }
   }
 
-  const barFootprint = (areaW / gW) * cellW;  // screen px width of one bar
-  const maxBarH = barFootprint * 4;
+  const barFootprint = (areaW / GRID_W) * cellW;  // always use full grid — keeps sky/soil fixed
+  const layerBarH = barFootprint * 4;  // fixed reference for soil/sky positions
+  const maxBarH   = barFootprint * 24;
   const cellTW  = areaW / gW;
   const cellTH  = areaH / gH;
 
-  drawSoilLayer(maxBarH);
+  drawSoilLayer(layerBarH);
   drawSeaLayer();
 
   // Painter's algorithm: render back-to-front along ascending gx+gy diagonals
@@ -183,7 +186,7 @@ function draw() {
     for (let gx = max(0, sum - gH + 1); gx <= min(sum, gW - 1); gx++) {
       const gy   = sum - gx;
       const elev = elevGrid[gy * gW + gx];
-      if (isNaN(elev) || elev <= 0) continue;
+      if (isNaN(elev) || elev <= 7) continue;
 
       const t    = elev / ELEV_DISPLAY_MAX;
       const barH = t * maxBarH;
@@ -193,7 +196,7 @@ function draw() {
     }
   }
 
-  drawSkyLayer(maxBarH);
+  drawSkyLayer(layerBarH);
 
   updateInfo();
 }

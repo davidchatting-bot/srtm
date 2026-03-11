@@ -203,10 +203,10 @@ app.get("/tiles/:z/:x/:y.png", (req, res) => {
         if (isNaN(val)) {
           png.data[idx + 3] = 0;
         } else {
-          const norm = Math.max(0, Math.min(255, Math.floor(((val - ELEV_MIN) / ELEV_RANGE) * 255)));
-          png.data[idx]     = norm;
-          png.data[idx + 1] = norm;
-          png.data[idx + 2] = norm;
+          const v16 = Math.max(0, Math.min(65535, Math.round(((val - ELEV_MIN) / ELEV_RANGE) * 65535)));
+          png.data[idx]     = (v16 >> 8) & 0xff;  // high byte → R
+          png.data[idx + 1] = v16 & 0xff;          // low byte  → G
+          png.data[idx + 2] = 0;
           png.data[idx + 3] = 255;
         }
       }
