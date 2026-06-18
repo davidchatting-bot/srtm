@@ -2,16 +2,44 @@ import express from "express";
 import { PNG } from "pngjs";
 import fs from "fs";
 import path from "path";
+import crypto from "crypto";
 
 const app = express();
 const PORT = 3000;
 const DATA_DIR = path.join(process.cwd(), "data");
+const CACHE_DIR = path.join(process.cwd(), "cache");
 const TILE_SIZE = 256;
 const ELEV_MIN = -500;
 const ELEV_MAX = 8500;
 const ELEV_RANGE = ELEV_MAX - ELEV_MIN;
 
 app.use(express.static(path.join(process.cwd(), "p5js")));
+
+// Disk cache for generated SVGs, keyed by every parameter that affects the
+// output. Lets a slow contour render be computed once (e.g. while warming the
+// cache for a demo area) and reused on every later request without touching
+// the elevation data or the marching-squares/smoothing pipeline again.
+function cachePath(category, parts) {
+  const key = crypto.createHash("sha1").update(JSON.stringify(parts)).digest("hex").slice(0, 20);
+  return path.join(CACHE_DIR, category, `${key}.svg`);
+}
+
+function readCache(filePath) {
+  try {
+    return fs.readFileSync(filePath, "utf8");
+  } catch {
+    return null;
+  }
+}
+
+function writeCache(filePath, svg) {
+  try {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, svg);
+  } catch (err) {
+    console.error("Cache write failed:", err);
+  }
+}
 
 // --- HGT file reading ---
 // .hgt files are a flat row-major grid of big-endian signed Int16.
@@ -82,10 +110,12 @@ function loadSRTMCache(viewMinLon, viewMinLat, viewMaxLon, viewMaxLat) {
     const oMaxLat = Math.min(viewMaxLat, maxLat);
     if (oMinLon >= oMaxLon || oMinLat >= oMaxLat) continue;
 
-    const tx1 = Math.max(0, Math.floor((oMinLon - minLon) / pixelDeg));
-    const tx2 = Math.min(size, Math.ceil((oMaxLon - minLon) / pixelDeg));
-    const ty1 = Math.max(0, Math.floor((maxLat - oMaxLat) / pixelDeg));
-    const ty2 = Math.min(size, Math.ceil((maxLat - oMinLat) / pixelDeg));
+    // Padded by 1px so sampleCache's bilinear lookup always has a neighbour to
+    // interpolate against, even for points right at the requested view's edge.
+    const tx1 = Math.max(0, Math.floor((oMinLon - minLon) / pixelDeg) - 1);
+    const tx2 = Math.min(size, Math.ceil((oMaxLon - minLon) / pixelDeg) + 1);
+    const ty1 = Math.max(0, Math.floor((maxLat - oMaxLat) / pixelDeg) - 1);
+    const ty2 = Math.min(size, Math.ceil((maxLat - oMinLat) / pixelDeg) + 1);
 
     const readWidth  = tx2 - tx1;
     const readHeight = ty2 - ty1;
@@ -103,13 +133,25 @@ function loadSRTMCache(viewMinLon, viewMinLat, viewMaxLon, viewMaxLat) {
   return cache;
 }
 
+// Bilinear interpolation between the 4 nearest samples, so values vary smoothly
+// even when querying at a finer resolution than SRTM's native ~30-90m grid
+// (otherwise nearest-neighbour lookups produce blocky, axis-aligned contours).
 function sampleCache(cache, lon, lat) {
   const c = cache.get(lonLatToTileName(lon, lat));
   if (!c) return NaN;
-  const sx = Math.floor((lon - c.originLon) / c.pixelDeg);
-  const sy = Math.floor((c.originLat - lat) / c.pixelDeg);
-  if (sx < 0 || sx >= c.readWidth || sy < 0 || sy >= c.readHeight) return NaN;
-  return c.data[sy * c.readWidth + sx];
+
+  const fx = (lon - c.originLon) / c.pixelDeg;
+  const fy = (c.originLat - lat) / c.pixelDeg;
+  const x0 = Math.floor(fx), y0 = Math.floor(fy);
+  const tx = fx - x0, ty = fy - y0;
+
+  const at = (x, y) => (x < 0 || x >= c.readWidth || y < 0 || y >= c.readHeight) ? NaN : c.data[y * c.readWidth + x];
+  const v00 = at(x0, y0), v10 = at(x0 + 1, y0), v01 = at(x0, y0 + 1), v11 = at(x0 + 1, y0 + 1);
+  if (isNaN(v00) || isNaN(v10) || isNaN(v01) || isNaN(v11)) return at(Math.round(fx), Math.round(fy));
+
+  const top = v00 + (v10 - v00) * tx;
+  const bottom = v01 + (v11 - v01) * tx;
+  return top + (bottom - top) * ty;
 }
 
 // --- Slippy tile math (Web Mercator) ---
@@ -144,6 +186,269 @@ function kmToDegreeOffsets(lat, radiusKm) {
   };
 }
 
+// --- Contour generation ---
+
+// Round a raw interval up to a "nice" 1/2/5 * 10^n step.
+function niceInterval(raw) {
+  if (raw <= 0) return 1;
+  const exponent = Math.floor(Math.log10(raw));
+  const fraction = raw / Math.pow(10, exponent);
+  const niceFraction = fraction <= 1 ? 1 : fraction <= 2 ? 2 : fraction <= 5 ? 5 : 10;
+  return niceFraction * Math.pow(10, exponent);
+}
+
+// Default contour interval, keyed by zoom only (not by any one tile's local relief) —
+// every tile at a given z picks the same levels, so lines land on the same elevation
+// bands and connect across tile edges instead of each tile inventing its own steps.
+//
+// Bands are anchored to the real OS leisure map series, converted from published
+// scale to slippy-map zoom via the standard ground-resolution formula
+// (metresPerPixel = 156543 * cos(lat) / 2^z, at the equator; scale denominator
+// assumes a 0.28mm pixel). That puts OS Landranger (1:50,000, 10m interval) at
+// z≈13.45 and OS Explorer (1:25,000, 5m interval) at z≈14.45 — the two real
+// anchor points below. Zooms outside that range extrapolate the same roughly
+// 2x-per-zoom progression OS itself uses between its published scales.
+const ZOOM_INTERVALS = [
+  [9, 100],   // wider than 1:1,000,000 — coarser than any OS leisure product
+  [11, 50],   // ~1:250,000
+  [12, 20],   // ~1:100,000
+  [14, 10],   // ~1:50,000  — OS Landranger interval
+  [16, 5],    // ~1:25,000  — OS Explorer interval (lowland)
+  [18, 2],    // ~1:10,000  — finer than any OS leisure map; extrapolated
+];
+
+function intervalForZoom(z) {
+  for (const [maxZoom, interval] of ZOOM_INTERVALS) {
+    if (z <= maxZoom) return interval;
+  }
+  return 1; // ~1:5,000 and closer — survey/LIDAR-grade resolution territory
+}
+
+// Elevation → greyscale, mapped over the fixed -500m..8500m range (same range the
+// /tiles encoding uses) so a given elevation always renders the same grey, independent
+// of any one tile or view's local min/max — needed for contour lines to read
+// consistently as you pan/zoom across tiles.
+function greyForElevation(elev) {
+  const t = Math.max(0, Math.min(1, (elev - ELEV_MIN) / ELEV_RANGE));
+  const g = Math.round(t * 255);
+  return `rgb(${g},${g},${g})`;
+}
+
+// Marching squares: returns line segments (in grid cell units) where `grid` crosses `level`.
+// Cells touching a NaN sample are skipped (no data).
+function marchingSquares(grid, w, h, level) {
+  const segments = [];
+  const lerp = (a, b) => (level - a) / (b - a);
+
+  for (let row = 0; row < h - 1; row++) {
+    for (let col = 0; col < w - 1; col++) {
+      const tl = grid[row * w + col];
+      const tr = grid[row * w + col + 1];
+      const bl = grid[(row + 1) * w + col];
+      const br = grid[(row + 1) * w + col + 1];
+      if (isNaN(tl) || isNaN(tr) || isNaN(bl) || isNaN(br)) continue;
+
+      const idx = (tl > level ? 8 : 0) | (tr > level ? 4 : 0) | (br > level ? 2 : 0) | (bl > level ? 1 : 0);
+      if (idx === 0 || idx === 15) continue;
+
+      const top    = { x: col + lerp(tl, tr), y: row };
+      const right  = { x: col + 1, y: row + lerp(tr, br) };
+      const bottom = { x: col + lerp(bl, br), y: row + 1 };
+      const left   = { x: col, y: row + lerp(tl, bl) };
+
+      // Ambiguous saddle cases (5, 10) resolved with a fixed diagonal choice.
+      const cases = {
+        1: [[left, bottom]],
+        2: [[bottom, right]],
+        3: [[left, right]],
+        4: [[top, right]],
+        5: [[left, top], [bottom, right]],
+        6: [[top, bottom]],
+        7: [[left, top]],
+        8: [[top, left]],
+        9: [[top, bottom]],
+        10: [[top, right], [left, bottom]],
+        11: [[top, right]],
+        12: [[left, right]],
+        13: [[bottom, right]],
+        14: [[left, bottom]],
+      };
+
+      for (const [a, b] of cases[idx]) segments.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y });
+    }
+  }
+  return segments;
+}
+
+// 3x3 box blur over the sampled elevation grid, ignoring NaN (no-data) neighbours.
+// Real elevation data — especially dense urban terrain — has sharp, grid-aligned
+// jumps between adjacent samples; contouring it raw produces blocky, near-90°
+// turns no amount of polyline smoothing removes, since the underlying field
+// itself is blocky. Blurring it first gives marching squares a softer field to
+// trace, on top of the polyline smoothing in smoothPathD.
+function blurGrid(src, w, h, passes) {
+  let grid = src;
+  for (let p = 0; p < passes; p++) {
+    const out = new Float32Array(w * h);
+    for (let row = 0; row < h; row++) {
+      for (let col = 0; col < w; col++) {
+        let sum = 0, count = 0;
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            const r = row + dy, c = col + dx;
+            if (r < 0 || r >= h || c < 0 || c >= w) continue;
+            const v = grid[r * w + c];
+            if (isNaN(v)) continue;
+            sum += v;
+            count++;
+          }
+        }
+        out[row * w + col] = count > 0 ? sum / count : NaN;
+      }
+    }
+    grid = out;
+  }
+  return grid;
+}
+
+// Marching squares emits one independent segment per grid cell, so neighbouring
+// cells on the same contour line each draw their own short straight stroke —
+// that's the source of the faceted, right-angled look. Two adjacent cells'
+// shared edge crossing is computed from the same pair of corner values in both
+// cells, so it lands at the exact same point; chain segments into polylines (or
+// closed loops) by joining on those shared endpoints so each contour line can be
+// drawn — and smoothed — as a single path.
+function chainSegments(segments) {
+  const keyOf = (x, y) => `${x.toFixed(4)},${y.toFixed(4)}`;
+  const adjacency = new Map();
+  const addAdj = (x, y, point, segIndex) => {
+    const k = keyOf(x, y);
+    if (!adjacency.has(k)) adjacency.set(k, []);
+    adjacency.get(k).push({ point, segIndex });
+  };
+  segments.forEach((s, i) => {
+    addAdj(s.x1, s.y1, { x: s.x2, y: s.y2 }, i);
+    addAdj(s.x2, s.y2, { x: s.x1, y: s.y1 }, i);
+  });
+
+  const used = new Set();
+  const chains = [];
+
+  const nextUnused = (point) => {
+    for (const c of adjacency.get(keyOf(point.x, point.y)) || []) {
+      if (!used.has(c.segIndex)) return c;
+    }
+    return null;
+  };
+
+  for (let i = 0; i < segments.length; i++) {
+    if (used.has(i)) continue;
+    used.add(i);
+    const chain = [{ x: segments[i].x1, y: segments[i].y1 }, { x: segments[i].x2, y: segments[i].y2 }];
+    let closed = false;
+
+    let next;
+    while ((next = nextUnused(chain[chain.length - 1]))) {
+      used.add(next.segIndex);
+      const p = next.point;
+      if (chain.length > 2 && Math.abs(p.x - chain[0].x) < 1e-4 && Math.abs(p.y - chain[0].y) < 1e-4) {
+        closed = true;
+        break;
+      }
+      chain.push(p);
+    }
+
+    if (!closed) {
+      let prev;
+      while ((prev = nextUnused(chain[0]))) {
+        used.add(prev.segIndex);
+        chain.unshift(prev.point);
+      }
+    }
+
+    chains.push({ points: chain, closed });
+  }
+  return chains;
+}
+
+// Chaikin corner-cutting: each iteration replaces every edge with two points at
+// 1/4 and 3/4 along it, pulling the line away from each original vertex. A
+// single pass (as a Bezier through midpoints) only softens the joint between
+// two edges; this actually erodes the sharp turns themselves, which is what's
+// needed where marching squares traces a flat plateau (e.g. sea-level cells)
+// and produces long grid-aligned, near-90° runs.
+function chaikinSmooth(points, closed, iterations) {
+  let pts = points;
+  for (let k = 0; k < iterations; k++) {
+    const n = pts.length;
+    const out = closed ? [] : [pts[0]];
+    const limit = closed ? n : n - 1;
+    for (let i = 0; i < limit; i++) {
+      const p0 = pts[i];
+      const p1 = pts[(i + 1) % n];
+      out.push({ x: p0.x * 0.75 + p1.x * 0.25, y: p0.y * 0.75 + p1.y * 0.25 });
+      out.push({ x: p0.x * 0.25 + p1.x * 0.75, y: p0.y * 0.25 + p1.y * 0.75 });
+    }
+    if (!closed) out.push(pts[n - 1]);
+    pts = out;
+  }
+  return pts;
+}
+
+// Perpendicular distance from p to the line through a-b (0 if a===b).
+function perpDist(p, a, b) {
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq === 0) return Math.hypot(p.x - a.x, p.y - a.y);
+  const t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / lenSq;
+  return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+}
+
+// Douglas-Peucker simplification. Blurring the elevation field rounds real
+// terrain, but some of the staircase look comes from genuinely rectilinear
+// features (piers, building footprints) baked into the DEM at the raster's
+// native resolution — no amount of blur fixes that, it just fights the data.
+// Dropping points that deviate less than `tolerance` from the line they sit
+// near removes the small staircase teeth while leaving real shape intact, so
+// the later Chaikin pass has fewer, longer edges to round into curves.
+function simplifyOpen(points, tolerance) {
+  if (points.length < 3) return points;
+  const a = points[0], b = points[points.length - 1];
+  let maxDist = -1, idx = -1;
+  for (let i = 1; i < points.length - 1; i++) {
+    const d = perpDist(points[i], a, b);
+    if (d > maxDist) { maxDist = d; idx = i; }
+  }
+  if (maxDist > tolerance) {
+    const left = simplifyOpen(points.slice(0, idx + 1), tolerance);
+    const right = simplifyOpen(points.slice(idx), tolerance);
+    return left.slice(0, -1).concat(right);
+  }
+  return [a, b];
+}
+
+function simplifyChain(points, closed, tolerance) {
+  if (points.length < 3) return points;
+  if (!closed) return simplifyOpen(points, tolerance);
+  const simplified = simplifyOpen(points.concat([points[0]]), tolerance);
+  if (simplified.length > 2) simplified.pop();
+  return simplified;
+}
+
+// Render a chained contour as a single smoothed path.
+function smoothPathD(points, closed, scale) {
+  if (points.length < 2) return null;
+  const simplified = simplifyChain(points, closed, 1.2);
+  const smoothed = simplified.length > 2 ? chaikinSmooth(simplified, closed, 4) : simplified;
+  const pts = smoothed.map(p => ({ x: p.x * scale, y: p.y * scale }));
+  const fmt = p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`;
+
+  let d = `M${fmt(pts[0])} `;
+  for (let i = 1; i < pts.length; i++) d += `L${fmt(pts[i])} `;
+  if (closed) d += "Z";
+  return d;
+}
+
 // --- Routes ---
 
 app.get("/info", (req, res) => {
@@ -176,6 +481,157 @@ app.get("/heightmap", (req, res) => {
   }
 
   res.json({ samples, data });
+});
+
+app.get("/contours.svg", (req, res) => {
+  try {
+    const lon = parseFloat(req.query.lon);
+    const lat = parseFloat(req.query.lat);
+    const radiusKm = parseFloat(req.query.radius) || 5;
+    const samples = Math.min(400, Math.max(8, parseInt(req.query.resolution) || 100));
+    const size = Math.min(2000, Math.max(64, parseInt(req.query.size) || 800));
+    const strokeWidth = Math.min(10, Math.max(0.1, parseFloat(req.query.strokeWidth) || 1));
+    if (isNaN(lon) || isNaN(lat)) return res.status(400).send("Invalid lon/lat");
+
+    const cacheFile = cachePath("contours", { lon, lat, radiusKm, samples, size, strokeWidth, interval: req.query.interval || "auto" });
+    const cached = readCache(cacheFile);
+    if (cached) return res.type("image/svg+xml").send(cached);
+
+    const { latOffset, lonOffset } = kmToDegreeOffsets(lat, radiusKm);
+    const cache = loadSRTMCache(lon - lonOffset, lat - latOffset, lon + lonOffset, lat + latOffset);
+    if (cache.size === 0) return res.status(404).send("No elevation data available");
+
+    let grid = new Float32Array(samples * samples);
+    for (let row = 0; row < samples; row++) {
+      for (let col = 0; col < samples; col++) {
+        const sLon = (lon - lonOffset) + (col / (samples - 1)) * lonOffset * 2;
+        const sLat = (lat + latOffset) - (row / (samples - 1)) * latOffset * 2;
+        grid[row * samples + col] = sampleCache(cache, sLon, sLat);
+      }
+    }
+    grid = blurGrid(grid, samples, samples, 3);
+
+    let min = Infinity, max = -Infinity;
+    for (const v of grid) {
+      if (!isNaN(v)) { if (v < min) min = v; if (v > max) max = v; }
+    }
+    if (min === Infinity) return res.status(404).send("No elevation data available for this area");
+
+    const interval = parseFloat(req.query.interval) || niceInterval((max - min) / 12);
+    const scale = size / (samples - 1);
+
+    let body = "";
+    for (let level = Math.ceil(min / interval) * interval; level < max; level += interval) {
+      const segments = marchingSquares(grid, samples, samples, level);
+      if (segments.length === 0) continue;
+      const grey = greyForElevation(level);
+      body += `<g stroke="${grey}" stroke-width="${strokeWidth}" fill="none" stroke-linecap="round" stroke-linejoin="round">`;
+      for (const chain of chainSegments(segments)) {
+        const d = smoothPathD(chain.points, chain.closed, scale);
+        if (d) body += `<path d="${d}"/>`;
+      }
+      body += `</g>`;
+    }
+
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">` +
+      `<rect width="100%" height="100%" fill="#808080"/>` +
+      body +
+      `</svg>`;
+
+    writeCache(cacheFile, svg);
+    res.setHeader("Content-Type", "image/svg+xml");
+    res.send(svg);
+  } catch (err) {
+    console.error(err);
+    res.status(500).send("Server error");
+  }
+});
+
+app.get("/contour-tiles/:z/:x/:y.svg", (req, res) => {
+  try {
+    const z = parseInt(req.params.z);
+    const x = parseInt(req.params.x);
+    const y = parseInt(req.params.y);
+    if (isNaN(z) || isNaN(x) || isNaN(y)) return res.status(400).send("Invalid tile coordinates");
+
+    const samples = Math.min(256, Math.max(8, parseInt(req.query.resolution) || 128));
+    const strokeWidth = Math.min(5, Math.max(0.1, parseFloat(req.query.strokeWidth) || 1));
+
+    const cacheFile = cachePath(`contour-tiles/${z}`, { x, y, resolution: samples, interval: req.query.interval || "auto", strokeWidth });
+    const cached = readCache(cacheFile);
+    if (cached) return res.type("image/svg+xml").send(cached);
+
+    const svgOpen = `<svg xmlns="http://www.w3.org/2000/svg" width="${TILE_SIZE}" height="${TILE_SIZE}" viewBox="0 0 ${TILE_SIZE} ${TILE_SIZE}">`;
+    const sendAndCache = svg => { writeCache(cacheFile, svg); res.type("image/svg+xml").send(svg); };
+
+    // Sample a margin of extra grid cells beyond the tile's own edges (in
+    // neighbouring tiles' territory) so the blur below has real data to draw on
+    // right up to the tile boundary. Without this, each tile's edge would blur
+    // against its own clipped average instead of the neighbour's actual values,
+    // and the contours fixed earlier to stitch across tile edges would drift
+    // apart again. 2 cells of margin covers 2 box-blur passes (radius 1 each).
+    const blurPasses = 3;
+    const margin = blurPasses;
+    const paddedSamples = samples + margin * 2;
+    const pixelAt = i => ((i - margin) / (samples - 1)) * TILE_SIZE;
+
+    const nw = pixelToLonLat(pixelAt(0), pixelAt(0), x, y, z);
+    const se = pixelToLonLat(pixelAt(paddedSamples - 1), pixelAt(paddedSamples - 1), x, y, z);
+    const cache = loadSRTMCache(nw.lon, se.lat, se.lon, nw.lat);
+    if (cache.size === 0) return sendAndCache(`${svgOpen}</svg>`);
+
+    const paddedGrid = new Float32Array(paddedSamples * paddedSamples);
+    for (let row = 0; row < paddedSamples; row++) {
+      for (let col = 0; col < paddedSamples; col++) {
+        const { lon, lat } = pixelToLonLat(pixelAt(col), pixelAt(row), x, y, z);
+        paddedGrid[row * paddedSamples + col] = sampleCache(cache, lon, lat);
+      }
+    }
+    const blurred = blurGrid(paddedGrid, paddedSamples, paddedSamples, blurPasses);
+
+    const grid = new Float32Array(samples * samples);
+    for (let row = 0; row < samples; row++) {
+      for (let col = 0; col < samples; col++) {
+        grid[row * samples + col] = blurred[(row + margin) * paddedSamples + (col + margin)];
+      }
+    }
+
+    let min = Infinity, max = -Infinity;
+    for (const v of grid) {
+      if (!isNaN(v)) { if (v < min) min = v; if (v > max) max = v; }
+    }
+    if (min === Infinity) return sendAndCache(`${svgOpen}</svg>`);
+
+    // OS Explorer actually uses 10m instead of 5m in mountainous regions (the
+    // 5m lines would crowd together unreadably), but that's decided per published
+    // map sheet — a fixed, pre-agreed boundary. Deciding it live per-tile from
+    // each tile's own sampled relief would make neighbouring tiles disagree
+    // whenever one straddles the steep/flat line, breaking the cross-tile
+    // stitching above; deciding it from the whole source file's relief is too
+    // coarse (e.g. SF's source file spans Mt. Tamalpais, so it'd flag flat
+    // downtown SF as mountainous too). So it's left as an explicit override via
+    // ?interval= rather than guessed automatically.
+    const interval = parseFloat(req.query.interval) || intervalForZoom(z);
+    const scale = TILE_SIZE / (samples - 1);
+
+    let body = "";
+    for (let level = Math.ceil(min / interval) * interval; level <= max; level += interval) {
+      const segments = marchingSquares(grid, samples, samples, level);
+      if (segments.length === 0) continue;
+      const grey = greyForElevation(level);
+      body += `<g stroke="${grey}" stroke-width="${strokeWidth}" fill="none" stroke-linecap="round" stroke-linejoin="round">`;
+      for (const chain of chainSegments(segments)) {
+        const d = smoothPathD(chain.points, chain.closed, scale);
+        if (d) body += `<path d="${d}"/>`;
+      }
+      body += `</g>`;
+    }
+
+    sendAndCache(`${svgOpen}${body}</svg>`);
+  } catch (err) {
+    console.error(err);
+    res.status(500).send("Server error");
+  }
 });
 
 app.get("/tiles/:z/:x/:y.png", (req, res) => {
