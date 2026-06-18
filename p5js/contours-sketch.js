@@ -321,7 +321,13 @@ function mouseDragged() {
 
 let zoomRequestTimer = null;
 
-// Zooms toward/away from the view centre (not cursor-anchored — kept simple).
+// Zooms toward/away from the point under the cursor (matching Google Maps —
+// not the view centre): find the lon/lat currently under the mouse, change
+// zoom, then re-solve centerX/centerY so that same lon/lat lands back under
+// the cursor. Without this, zooming in on something off-centre drifts it
+// toward the middle of the view with every scroll, which feels wrong the
+// moment you compare it to literally any other map.
+//
 // A continuous scroll gesture fires many wheel events in quick succession —
 // each one passes through an intermediate zoom level on the way to wherever
 // scrolling stops. Updating zoomLevel and redrawing on every event keeps the
@@ -332,11 +338,17 @@ let zoomRequestTimer = null;
 // stuck behind several already-irrelevant batches for seconds. Debouncing
 // the request to fire once scrolling has paused avoids that entirely.
 function mouseWheel(event) {
-  const lon = tileXToLon(centerX, zoomLevel);
-  const lat = tileYToLat(centerY, zoomLevel);
+  const cursorTileX = centerX + (mouseX - width / 2) / TILE_SIZE;
+  const cursorTileY = centerY + (mouseY - height / 2) / TILE_SIZE;
+  const lon = tileXToLon(cursorTileX, zoomLevel);
+  const lat = tileYToLat(cursorTileY, zoomLevel);
+
   zoomLevel = constrain(zoomLevel + (event.deltaY > 0 ? -1 : 1), MIN_ZOOM, MAX_ZOOM);
-  centerX = lonToTileX(lon, zoomLevel);
-  centerY = latToTileY(lat, zoomLevel);
+
+  const newCursorTileX = lonToTileX(lon, zoomLevel);
+  const newCursorTileY = latToTileY(lat, zoomLevel);
+  centerX = newCursorTileX - (mouseX - width / 2) / TILE_SIZE;
+  centerY = newCursorTileY - (mouseY - height / 2) / TILE_SIZE;
   redraw();
 
   clearTimeout(zoomRequestTimer);
