@@ -4,7 +4,6 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>SRTM Contour Viewer</title>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -20,6 +19,15 @@
       width: 100%;
       height: 100%;
       background: #808080;
+      cursor: grab;
+    }
+
+    #map:active {
+      cursor: grabbing;
+    }
+
+    #map canvas {
+      display: block;
     }
 
     #panel {
@@ -73,10 +81,23 @@
       font-size: 11px;
       color: #999;
     }
+
+    #info {
+      position: fixed;
+      bottom: 12px;
+      left: 12px;
+      color: #fff;
+      font-size: 12px;
+      background: rgba(0, 0, 0, 0.5);
+      padding: 6px 10px;
+      border-radius: 4px;
+      pointer-events: none;
+    }
   </style>
 </head>
 <body>
-  <div id="map"></div>
+  <main id="map"></main>
+  <div id="info"></div>
   <form id="panel" onsubmit="goToLocation(event)">
     <label>Latitude
       <input id="lat-input" type="number" step="any" value="56.2208" required>
@@ -93,94 +114,17 @@
     <label>Line width
       <input id="stroke-input" type="number" step="any" value="1" min="0.1" max="5">
     </label>
+    <label>Grey range min (m, blank = -500)
+      <input id="grey-min-input" type="number" step="any" placeholder="-500">
+    </label>
+    <label>Grey range max (m, blank = 8500)
+      <input id="grey-max-input" type="number" step="any" placeholder="8500">
+    </label>
     <button type="submit">Go / Apply</button>
     <button type="button" id="export-button" onclick="exportSVG()">Export SVG</button>
     <span id="export-status"></span>
   </form>
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script>
-    const map = L.map("map", { attributionControl: false }).setView([56.2208, -2.7036], 13);
-
-    let tileLayer = null;
-
-    function buildTileUrl() {
-      const params = new URLSearchParams();
-      const interval = document.getElementById("interval-input").value;
-      if (interval) params.set("interval", interval);
-      params.set("resolution", document.getElementById("resolution-input").value);
-      params.set("strokeWidth", document.getElementById("stroke-input").value);
-      return `/contour-tiles/{z}/{x}/{y}.svg?${params.toString()}`;
-    }
-
-    function applyTileLayer() {
-      if (tileLayer) map.removeLayer(tileLayer);
-      tileLayer = L.tileLayer(buildTileUrl(), { tileSize: 256, maxNativeZoom: 16 }).addTo(map);
-    }
-
-    function goToLocation(event) {
-      if (event) event.preventDefault();
-      const lat = parseFloat(document.getElementById("lat-input").value);
-      const lon = parseFloat(document.getElementById("lon-input").value);
-      if (!isNaN(lat) && !isNaN(lon)) map.setView([lat, lon], map.getZoom());
-      applyTileLayer();
-    }
-
-    applyTileLayer();
-
-    // Merge every tile currently on screen into one flat SVG: fetch each
-    // tile's own SVG (the browser already has it cached from rendering the
-    // <img>), strip its outer <svg> wrapper, and re-place its contents in a
-    // <g transform="translate(...)"> positioned at that tile's actual
-    // on-screen pixel location for the current view. Going through the CRS
-    // (rather than reading the tile <img> elements' CSS transforms directly)
-    // keeps this correct regardless of how Leaflet happens to be positioning
-    // the tile layer's DOM at the moment of export.
-    async function exportSVG() {
-      const status = document.getElementById("export-status");
-      const button = document.getElementById("export-button");
-      button.disabled = true;
-      status.textContent = "Exporting...";
-
-      try {
-        const crs = map.options.crs;
-        const zoom = map.getZoom();
-        const tiles = Object.values(tileLayer._tiles).filter(t => t.current && t.loaded);
-        if (tiles.length === 0) throw new Error("No loaded tiles to export");
-
-        const parser = new DOMParser();
-        const parts = await Promise.all(tiles.map(async tile => {
-          const nwPoint = L.point(tile.coords.x * 256, tile.coords.y * 256);
-          const nwLatLng = crs.pointToLatLng(nwPoint, zoom);
-          const { x, y } = map.latLngToContainerPoint(nwLatLng);
-
-          const res = await fetch(tile.el.src);
-          const text = await res.text();
-          const inner = parser.parseFromString(text, "image/svg+xml").documentElement.innerHTML;
-          return `<g transform="translate(${x.toFixed(2)},${y.toFixed(2)})">${inner}</g>`;
-        }));
-
-        const size = map.getSize();
-        const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${size.x}" height="${size.y}" viewBox="0 0 ${size.x} ${size.y}">` +
-          `<rect width="100%" height="100%" fill="#808080"/>` +
-          parts.join("") +
-          `</svg>`;
-
-        const blob = new Blob([svg], { type: "image/svg+xml" });
-        const url = URL.createObjectURL(blob);
-        const center = map.getCenter();
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = `contours-${center.lat.toFixed(4)}-${center.lng.toFixed(4)}-z${zoom}.svg`;
-        a.click();
-        URL.revokeObjectURL(url);
-        status.textContent = `Exported ${tiles.length} tiles`;
-      } catch (err) {
-        console.error(err);
-        status.textContent = "Export failed: " + err.message;
-      } finally {
-        button.disabled = false;
-      }
-    }
-  </script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.4/p5.min.js"></script>
+  <script src="contours-sketch.js"></script>
 </body>
 </html>

@@ -224,12 +224,18 @@ function intervalForZoom(z) {
   return 1; // ~1:5,000 and closer — survey/LIDAR-grade resolution territory
 }
 
-// Elevation → greyscale, mapped over the fixed -500m..8500m range (same range the
-// /tiles encoding uses) so a given elevation always renders the same grey, independent
-// of any one tile or view's local min/max — needed for contour lines to read
-// consistently as you pan/zoom across tiles.
-function greyForElevation(elev) {
-  const t = Math.max(0, Math.min(1, (elev - ELEV_MIN) / ELEV_RANGE));
+// Elevation → greyscale. Defaults to the fixed -500m..8500m range (same range
+// the /tiles encoding uses) so a given elevation renders the same grey
+// regardless of any one tile's local min/max — needed for contours to read
+// consistently as you pan/zoom across tiles. That global range spans
+// sea-level to Everest though, so anywhere with modest relief (most of the
+// UK, say 0-200m) only occupies a sliver of it — every line ends up nearly
+// the same near-black grey. Callers can narrow greyMin/greyMax to the area's
+// actual relief for visible contrast; as long as the same range is used for
+// every tile in a session (the demo page does this), cross-tile consistency
+// is preserved — it's just consistent over a different, chosen range.
+function greyForElevation(elev, greyMin = ELEV_MIN, greyMax = ELEV_MAX) {
+  const t = Math.max(0, Math.min(1, (elev - greyMin) / (greyMax - greyMin || 1)));
   const g = Math.round(t * 255);
   return `rgb(${g},${g},${g})`;
 }
@@ -491,9 +497,11 @@ app.get("/contours.svg", (req, res) => {
     const samples = Math.min(400, Math.max(8, parseInt(req.query.resolution) || 100));
     const size = Math.min(2000, Math.max(64, parseInt(req.query.size) || 800));
     const strokeWidth = Math.min(10, Math.max(0.1, parseFloat(req.query.strokeWidth) || 1));
+    const greyMin = req.query.greyMin !== undefined ? parseFloat(req.query.greyMin) : ELEV_MIN;
+    const greyMax = req.query.greyMax !== undefined ? parseFloat(req.query.greyMax) : ELEV_MAX;
     if (isNaN(lon) || isNaN(lat)) return res.status(400).send("Invalid lon/lat");
 
-    const cacheFile = cachePath("contours", { lon, lat, radiusKm, samples, size, strokeWidth, interval: req.query.interval || "auto" });
+    const cacheFile = cachePath("contours", { lon, lat, radiusKm, samples, size, strokeWidth, greyMin, greyMax, interval: req.query.interval || "auto" });
     const cached = readCache(cacheFile);
     if (cached) return res.type("image/svg+xml").send(cached);
 
@@ -524,7 +532,7 @@ app.get("/contours.svg", (req, res) => {
     for (let level = Math.ceil(min / interval) * interval; level < max; level += interval) {
       const segments = marchingSquares(grid, samples, samples, level);
       if (segments.length === 0) continue;
-      const grey = greyForElevation(level);
+      const grey = greyForElevation(level, greyMin, greyMax);
       body += `<g stroke="${grey}" stroke-width="${strokeWidth}" fill="none" stroke-linecap="round" stroke-linejoin="round">`;
       for (const chain of chainSegments(segments)) {
         const d = smoothPathD(chain.points, chain.closed, scale);
@@ -556,8 +564,10 @@ app.get("/contour-tiles/:z/:x/:y.svg", (req, res) => {
 
     const samples = Math.min(256, Math.max(8, parseInt(req.query.resolution) || 128));
     const strokeWidth = Math.min(5, Math.max(0.1, parseFloat(req.query.strokeWidth) || 1));
+    const greyMin = req.query.greyMin !== undefined ? parseFloat(req.query.greyMin) : ELEV_MIN;
+    const greyMax = req.query.greyMax !== undefined ? parseFloat(req.query.greyMax) : ELEV_MAX;
 
-    const cacheFile = cachePath(`contour-tiles/${z}`, { x, y, resolution: samples, interval: req.query.interval || "auto", strokeWidth });
+    const cacheFile = cachePath(`contour-tiles/${z}`, { x, y, resolution: samples, interval: req.query.interval || "auto", strokeWidth, greyMin, greyMax });
     const cached = readCache(cacheFile);
     if (cached) return res.type("image/svg+xml").send(cached);
 
@@ -618,7 +628,7 @@ app.get("/contour-tiles/:z/:x/:y.svg", (req, res) => {
     for (let level = Math.ceil(min / interval) * interval; level <= max; level += interval) {
       const segments = marchingSquares(grid, samples, samples, level);
       if (segments.length === 0) continue;
-      const grey = greyForElevation(level);
+      const grey = greyForElevation(level, greyMin, greyMax);
       body += `<g stroke="${grey}" stroke-width="${strokeWidth}" fill="none" stroke-linecap="round" stroke-linejoin="round">`;
       for (const chain of chainSegments(segments)) {
         const d = smoothPathD(chain.points, chain.closed, scale);

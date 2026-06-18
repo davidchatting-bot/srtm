@@ -98,7 +98,7 @@ Returns a grayscale PNG at full SRTM resolution centred on the given point. Brig
 ### Contour map (SVG)
 
 ```
-GET /contours.svg?lon=<longitude>&lat=<latitude>&radius=<km>&resolution=<n>&interval=<m>&size=<px>&strokeWidth=<px>
+GET /contours.svg?lon=<longitude>&lat=<latitude>&radius=<km>&resolution=<n>&interval=<m>&size=<px>&strokeWidth=<px>&greyMin=<m>&greyMax=<m>
 ```
 
 | Parameter | Required | Default | Description |
@@ -110,21 +110,24 @@ GET /contours.svg?lon=<longitude>&lat=<latitude>&radius=<km>&resolution=<n>&inte
 | `interval` | no | auto | Contour interval in metres; auto picks a "nice" interval for ~12 levels across the local elevation range |
 | `size` | no | 800 | Output SVG width/height in pixels |
 | `strokeWidth` | no | 1 | Contour line stroke width in pixels |
+| `greyMin` / `greyMax` | no | -500 / 8500 | Elevation range (metres) mapped to grey 0–255. The default spans sea-level to Everest so a given elevation is the same grey everywhere, but that means modest local relief (most of the UK, ~0–200m) only occupies a sliver of it and every line looks almost the same near-black grey. Narrow this to the area's actual elevation range (e.g. `greyMin=0&greyMax=150`) for visible contrast |
 
-Returns an SVG image with one contour line per elevation level, computed via marching squares over a resampled elevation grid. Each contour line is shaded a level of grey proportional to its elevation over the fixed −500m–8500m range (the same range the `/tiles` encoding uses), so a given elevation always renders the same grey. Elevation samples are bilinearly interpolated, and each contour is chained into a single path and rendered as a quadratic-Bezier smoothed curve rather than raw straight segments, to avoid a blocky/faceted look.
+Returns an SVG image with one contour line per elevation level, computed via marching squares over a resampled elevation grid. Each contour line is shaded a level of grey proportional to its elevation. Elevation samples are bilinearly interpolated, and each contour is chained into a single path and rendered as a quadratic-Bezier smoothed curve rather than raw straight segments, to avoid a blocky/faceted look.
 
 ### Contour slippy tiles (SVG)
 
 ```
-GET /contour-tiles/:z/:x/:y.svg?resolution=<n>&interval=<m>&strokeWidth=<px>
+GET /contour-tiles/:z/:x/:y.svg?resolution=<n>&interval=<m>&strokeWidth=<px>&greyMin=<m>&greyMax=<m>
 ```
 
 | Parameter | Required | Default | Description |
 |-----------|----------|---------|-------------|
 | `resolution` | no | 128 | Sampling grid size per tile (NxN), 8–256 |
 | `interval` | no | by zoom | Contour interval in metres. Default is keyed by zoom level only, so every tile at a given zoom uses the same levels and lines connect across tile edges — a per-tile auto interval based on local relief would pick different levels per tile and the lines wouldn't line up |
+| `strokeWidth` | no | 1 | Contour line stroke width in pixels |
+| `greyMin` / `greyMax` | no | -500 / 8500 | Same elevation→grey range as `/contours.svg` above. Narrowing it to the area's relief is what makes contour lines visually distinguishable instead of all rendering as nearly the same dark grey — as long as the same range is requested for every tile in a session (the demo page does this), neighbouring tiles still agree on which grey a given elevation gets |
 
-The zoom-keyed default mirrors real OS leisure-map intervals, anchored at the zoom level the equivalent published scale converts to (`metresPerPixel = 156543 * cos(lat) / 2^z`, equator-approximate):
+The zoom-keyed interval default mirrors real OS leisure-map intervals, anchored at the zoom level the equivalent published scale converts to (`metresPerPixel = 156543 * cos(lat) / 2^z`, equator-approximate):
 
 | Zoom | Interval | Equivalent scale |
 |------|----------|-------------------|
@@ -137,7 +140,6 @@ The zoom-keyed default mirrors real OS leisure-map intervals, anchored at the zo
 | >18 | 1m | survey/LIDAR-grade resolution |
 
 OS Explorer doubles its interval to 10m in mountainous regions, but that's decided per published map sheet (a fixed boundary), not computed live — doing it per-tile from local relief would make neighbouring tiles disagree right where one straddles the steep/flat line, breaking the cross-tile stitching above. Pass `?interval=10` explicitly for mountainous areas instead of relying on auto-detection.
-| `strokeWidth` | no | 1 | Contour line stroke width in pixels |
 
 Standard XYZ contour tiles, greyscale-encoded the same way as `/contours.svg`, with a transparent background — usable as a slippy-map overlay:
 
@@ -145,7 +147,9 @@ Standard XYZ contour tiles, greyscale-encoded the same way as `/contours.svg`, w
 L.tileLayer('http://localhost:3000/contour-tiles/{z}/{x}/{y}.svg').addTo(map);
 ```
 
-A pannable/zoomable demo page using this tile layer is available at `/contours.html`. Its "Export SVG" button merges every tile currently on screen into a single flat SVG (re-fetches each tile, strips its outer `<svg>` wrapper, and re-places its contents in a `<g transform="translate(...)">` at that tile's actual on-screen position via the map's CRS) and downloads it — a real vector file with no tile-boundary seams, not a screenshot.
+A pannable/zoomable demo page using these tiles is available at `/contours.html` (`p5js/contours-sketch.js`) — a p5.js sketch, not Leaflet: it fetches each tile's SVG itself, decodes it into a `p5.Image` via a local blob URL (drawing straight from the server URL makes the browser fetch the same SVG twice), and draws tiles directly to the canvas with its own pan (drag) and zoom (scroll) handling, following the same tile-coordinate math as the isometric viewer's `sketch.js`. It also plots `p5js/data/log.csv` (a LoRa traceroute log — gitignored, not checked in) as coloured points: green for a `DIRECT` result, red otherwise.
+
+Its "Export SVG" button merges every tile currently on screen into a single flat SVG — reusing each tile's already-fetched markup, stripped of its outer `<svg>` wrapper and re-placed in a `<g transform="translate(...)">` at the screen position it was drawn at — plus the visible points, and downloads it as one seamless vector file (not a screenshot).
 
 ## Data
 
