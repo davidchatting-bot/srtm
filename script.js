@@ -14,6 +14,7 @@ const ELEV_MAX = 8500;
 const ELEV_RANGE = ELEV_MAX - ELEV_MIN;
 
 app.use(express.static(path.join(process.cwd(), "p5js")));
+app.use(express.json());
 
 // Disk cache for generated SVGs, keyed by every parameter that affects the
 // output. Lets a slow contour render be computed once (e.g. while warming the
@@ -772,6 +773,263 @@ app.get("/terrain", (req, res) => {
 
     res.setHeader("Content-Type", "image/png");
     png.pack().pipe(res);
+  } catch (err) {
+    console.error(err);
+    res.status(500).send("Server error");
+  }
+});
+
+// --- Line-of-sight / viewshed ---
+
+const EARTH_RADIUS_KM = 6371;
+
+// Standard spherical "destination point given distance and bearing" formula —
+// more accurate across all bearings and latitudes than scaling lon/lat by
+// fixed per-km degree offsets (which distorts as bearing departs from
+// east/west), needed here since we sample in every direction around a point.
+function destinationPoint(lon, lat, bearingDeg, distanceKm) {
+  const delta = distanceKm / EARTH_RADIUS_KM;
+  const theta = (bearingDeg * Math.PI) / 180;
+  const phi1 = (lat * Math.PI) / 180;
+  const lambda1 = (lon * Math.PI) / 180;
+
+  const phi2 = Math.asin(Math.sin(phi1) * Math.cos(delta) + Math.cos(phi1) * Math.sin(delta) * Math.cos(theta));
+  const lambda2 = lambda1 + Math.atan2(
+    Math.sin(theta) * Math.sin(delta) * Math.cos(phi1),
+    Math.cos(delta) - Math.sin(phi1) * Math.sin(phi2)
+  );
+
+  return { lon: (lambda2 * 180) / Math.PI, lat: (phi2 * 180) / Math.PI };
+}
+
+// Drop (metres) of the line of sight below a straight chord over distance d,
+// due to Earth's curvature. Scaling the radius by 7/6 is the standard
+// approximation for atmospheric refraction bending the ray slightly back
+// toward the surface, extending the geometric horizon by about 15%.
+function curvatureDropM(distanceKm, refraction) {
+  const effectiveRadiusKm = refraction ? EARTH_RADIUS_KM * (7 / 6) : EARTH_RADIUS_KM;
+  const dM = distanceKm * 1000;
+  return (dM * dM) / (2 * effectiveRadiusKm * 1000);
+}
+
+// Elevation in metres at (lon, lat), or sea level (0) if there's no data —
+// e.g. open sea beyond the loaded tiles — so a sightline crossing open water
+// gets a sensible curvature-limited result instead of an undefined gap.
+function elevationOrSeaLevel(cache, lon, lat) {
+  const v = sampleCache(cache, lon, lat);
+  return isNaN(v) ? 0 : v;
+}
+
+// The line-of-sight elevation angle (radians) from an observer to a point at
+// `elevAtPoint` metres, `distanceKm` away, accounting for Earth's curvature
+// and optionally refraction.
+function lineOfSightAngleAtElevation(observerElev, elevAtPoint, distanceKm, refraction) {
+  const drop = curvatureDropM(distanceKm, refraction);
+  return Math.atan2(elevAtPoint - observerElev - drop, distanceKm * 1000);
+}
+
+// Same, but for a point given as bearing+distance from the observer rather
+// than an explicit elevation — samples the real terrain there (ground level
+// + targetHeight) rather than an absolute altitude. Shared by /viewshed
+// (scanning outward to find the furthest point whose angle clears everything
+// closer) and /visibility (checking each intermediate point along a path to
+// a specific target) — both are the same underlying line-of-sight test,
+// just asking a different question of it.
+function lineOfSightAngle(cache, lon, lat, observerElev, bearingDeg, distanceKm, targetHeight, refraction) {
+  const { lon: tLon, lat: tLat } = destinationPoint(lon, lat, bearingDeg, distanceKm);
+  const elev = elevationOrSeaLevel(cache, tLon, tLat) + targetHeight;
+  return lineOfSightAngleAtElevation(observerElev, elev, distanceKm, refraction);
+}
+
+// Haversine great-circle distance (km) between two lon/lat points.
+function haversineDistanceKm(lon0, lat0, lon1, lat1) {
+  const phi1 = (lat0 * Math.PI) / 180;
+  const phi2 = (lat1 * Math.PI) / 180;
+  const dPhi = ((lat1 - lat0) * Math.PI) / 180;
+  const dLambda = ((lon1 - lon0) * Math.PI) / 180;
+  const a = Math.sin(dPhi / 2) ** 2 + Math.cos(phi1) * Math.cos(phi2) * Math.sin(dLambda / 2) ** 2;
+  return 2 * EARTH_RADIUS_KM * Math.asin(Math.sqrt(a));
+}
+
+// Initial bearing (degrees, 0-360) for the great-circle path from point 0 to point 1.
+function initialBearing(lon0, lat0, lon1, lat1) {
+  const phi1 = (lat0 * Math.PI) / 180;
+  const phi2 = (lat1 * Math.PI) / 180;
+  const dLambda = ((lon1 - lon0) * Math.PI) / 180;
+  const y = Math.sin(dLambda) * Math.cos(phi2);
+  const x = Math.cos(phi1) * Math.sin(phi2) - Math.sin(phi1) * Math.cos(phi2) * Math.cos(dLambda);
+  return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
+}
+
+app.get("/viewshed", (req, res) => {
+  try {
+    const lon = parseFloat(req.query.lon);
+    const lat = parseFloat(req.query.lat);
+    if (isNaN(lon) || isNaN(lat)) return res.status(400).send("Invalid lon/lat");
+
+    const radiusKm = Math.min(200, Math.max(0.5, parseFloat(req.query.radius) || 30));
+    const directions = Math.min(720, Math.max(8, parseInt(req.query.directions) || 360));
+    const steps = Math.min(2000, Math.max(8, parseInt(req.query.steps) || 256));
+    const observerHeight = parseFloat(req.query.observerHeight) || 1.7;
+    const targetHeight = parseFloat(req.query.targetHeight) || 0;
+    const refraction = req.query.refraction !== "false" && req.query.refraction !== "0";
+
+    const { latOffset, lonOffset } = kmToDegreeOffsets(lat, radiusKm);
+    const cache = loadSRTMCache(lon - lonOffset, lat - latOffset, lon + lonOffset, lat + latOffset);
+    if (cache.size === 0) return res.status(404).send("No elevation data available");
+
+    const observerGroundElev = sampleCache(cache, lon, lat);
+    if (isNaN(observerGroundElev)) return res.status(404).send("No elevation data at observer location");
+    const observerElev = observerGroundElev + observerHeight;
+
+    const stepKm = radiusKm / steps;
+    const ring = [];
+
+    for (let i = 0; i < directions; i++) {
+      const bearing = (i * 360) / directions;
+      let maxAngle = -Infinity;
+      let furthest = destinationPoint(lon, lat, bearing, stepKm);
+
+      for (let s = 1; s <= steps; s++) {
+        const dKm = s * stepKm;
+        const angle = lineOfSightAngle(cache, lon, lat, observerElev, bearing, dKm, targetHeight, refraction);
+        if (angle > maxAngle) {
+          maxAngle = angle;
+          furthest = destinationPoint(lon, lat, bearing, dKm);
+        }
+      }
+
+      ring.push([furthest.lon, furthest.lat]);
+    }
+
+    ring.push(ring[0]); // close the ring
+
+    res.json({
+      type: "Feature",
+      properties: { lon, lat, radiusKm, directions, steps, observerHeight, targetHeight, refraction },
+      geometry: { type: "Polygon", coordinates: [ring] },
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).send("Server error");
+  }
+});
+
+// Shared by the GET and POST /visibility handlers below — everything from
+// loading the elevation cache onward, once lon/lat/targets/options have been
+// parsed out of whichever request format was used. Returns either
+// { error: { status, message } } or { body } (the JSON to send as-is).
+function computeVisibility(lon, lat, targets, opts) {
+  const { observerHeight, targetHeight, refraction, stepsPerKm } = opts;
+
+  let minLon = lon, maxLon = lon, minLat = lat, maxLat = lat;
+  for (const t of targets) {
+    minLon = Math.min(minLon, t.lon); maxLon = Math.max(maxLon, t.lon);
+    minLat = Math.min(minLat, t.lat); maxLat = Math.max(maxLat, t.lat);
+  }
+  const marginDeg = 0.02;
+  const cache = loadSRTMCache(minLon - marginDeg, minLat - marginDeg, maxLon + marginDeg, maxLat + marginDeg);
+  if (cache.size === 0) return { error: { status: 404, message: "No elevation data available" } };
+
+  const observerGroundElev = sampleCache(cache, lon, lat);
+  if (isNaN(observerGroundElev)) return { error: { status: 404, message: "No elevation data at observer location" } };
+  const observerElev = observerGroundElev + observerHeight;
+
+  const results = targets.map(t => {
+    const distanceKm = haversineDistanceKm(lon, lat, t.lon, t.lat);
+    const bearing = initialBearing(lon, lat, t.lon, t.lat);
+    const steps = Math.max(1, Math.min(2000, Math.round(distanceKm * stepsPerKm)));
+    const stepKm = distanceKm / steps;
+
+    // Everything strictly between the observer and this target — the
+    // target itself is visible only if its own angle clears all of these.
+    let maxAngle = -Infinity;
+    for (let s = 1; s < steps; s++) {
+      const angle = lineOfSightAngle(cache, lon, lat, observerElev, bearing, s * stepKm, targetHeight, refraction);
+      if (angle > maxAngle) maxAngle = angle;
+    }
+
+    const targetRawElev = sampleCache(cache, t.lon, t.lat);
+    const targetAltitude = t.altitude !== undefined ? t.altitude : elevationOrSeaLevel(cache, t.lon, t.lat) + targetHeight;
+    const targetAngle = lineOfSightAngleAtElevation(observerElev, targetAltitude, distanceKm, refraction);
+
+    return {
+      lon: t.lon,
+      lat: t.lat,
+      distanceKm: Math.round(distanceKm * 1000) / 1000,
+      visible: targetAngle >= maxAngle,
+      groundElevation: isNaN(targetRawElev) ? null : targetRawElev,
+      altitude: targetAltitude,
+    };
+  });
+
+  return { body: { lon, lat, observerHeight, targetHeight, refraction, results } };
+}
+
+function visibilityOptsFrom(source) {
+  return {
+    observerHeight: parseFloat(source.observerHeight) || 1.7,
+    targetHeight: parseFloat(source.targetHeight) || 0,
+    refraction: source.refraction !== "false" && source.refraction !== false && source.refraction !== "0",
+    // Samples per km along each observer→target path — distinct from
+    // /viewshed's `steps` (a fixed count along a fixed radius) since here
+    // each target is a different distance away.
+    stepsPerKm: Math.min(50, Math.max(1, parseFloat(source.stepsPerKm) || 10)),
+  };
+}
+
+function sendVisibilityResult(res, result) {
+  if (result.error) return res.status(result.error.status).send(result.error.message);
+  res.json(result.body);
+}
+
+// GET, with targets packed into the query string — fine for a handful of
+// points, but a few hundred will overflow the server's request-header size
+// limit (HTTP 431). Use POST with a JSON body for large target lists.
+app.get("/visibility", (req, res) => {
+  try {
+    const lon = parseFloat(req.query.lon);
+    const lat = parseFloat(req.query.lat);
+    if (isNaN(lon) || isNaN(lat)) return res.status(400).send("Invalid lon/lat");
+    if (!req.query.targets) return res.status(400).send("Missing targets — lon,lat[,altitude] groups separated by |, e.g. targets=-2.70,56.22|-2.75,56.20,500");
+
+    // Altitude is optional per target: lon,lat is ground level (the terrain's
+    // own elevation, plus the global targetHeight offset); lon,lat,alt pins
+    // that target to an absolute altitude instead (e.g. a drone at a known
+    // height), ignoring both the sampled terrain and targetHeight.
+    const targets = req.query.targets.split("|").map(triple => {
+      const [tLon, tLat, tAlt] = triple.split(",").map(Number);
+      return { lon: tLon, lat: tLat, altitude: triple.split(",").length > 2 ? tAlt : undefined };
+    });
+    if (targets.length === 0 || targets.some(t => isNaN(t.lon) || isNaN(t.lat) || (t.altitude !== undefined && isNaN(t.altitude)))) {
+      return res.status(400).send("Invalid target in list");
+    }
+
+    sendVisibilityResult(res, computeVisibility(lon, lat, targets, visibilityOptsFrom(req.query)));
+  } catch (err) {
+    console.error(err);
+    res.status(500).send("Server error");
+  }
+});
+
+// POST, with targets as a JSON array — for large target lists (the GET form
+// hits HTTP 431 well before a few hundred points).
+app.post("/visibility", (req, res) => {
+  try {
+    const { lon, lat, targets: rawTargets } = req.body || {};
+    if (typeof lon !== "number" || typeof lat !== "number" || isNaN(lon) || isNaN(lat)) {
+      return res.status(400).send("Invalid lon/lat");
+    }
+    if (!Array.isArray(rawTargets) || rawTargets.length === 0) {
+      return res.status(400).send("Missing targets — an array of [lon, lat] or [lon, lat, altitude]");
+    }
+
+    const targets = rawTargets.map(t => ({ lon: t[0], lat: t[1], altitude: t.length > 2 ? t[2] : undefined }));
+    if (targets.some(t => isNaN(t.lon) || isNaN(t.lat) || (t.altitude !== undefined && isNaN(t.altitude)))) {
+      return res.status(400).send("Invalid target in list");
+    }
+
+    sendVisibilityResult(res, computeVisibility(lon, lat, targets, visibilityOptsFrom(req.body)));
   } catch (err) {
     console.error(err);
     res.status(500).send("Server error");

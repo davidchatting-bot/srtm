@@ -147,9 +147,131 @@ Standard XYZ contour tiles, greyscale-encoded the same way as `/contours.svg`, w
 L.tileLayer('http://localhost:3000/contour-tiles/{z}/{x}/{y}.svg').addTo(map);
 ```
 
-A pannable/zoomable demo page using these tiles is available at `/contours.html` (`p5js/contours-sketch.js`) — a p5.js sketch, not Leaflet: it fetches each tile's SVG itself, decodes it into a `p5.Image` via a local blob URL (drawing straight from the server URL makes the browser fetch the same SVG twice), and draws tiles directly to the canvas with its own pan (drag) and zoom (scroll) handling, following the same tile-coordinate math as the isometric viewer's `sketch.js`. It also plots `p5js/data/log.csv` (a LoRa traceroute log — gitignored, not checked in) as coloured points: green for a `DIRECT` result, red otherwise.
+A pannable/zoomable demo page using these tiles is available at `/contours.html` (`p5js/contours-sketch.js`) — a p5.js sketch, not Leaflet: it fetches each tile's SVG itself, decodes it into a `p5.Image` via a local blob URL (drawing straight from the server URL makes the browser fetch the same SVG twice), and draws tiles directly to the canvas with its own pan (drag) and zoom (scroll) handling, following the same tile-coordinate math as the isometric viewer's `sketch.js`.
+
+It also exercises `/visibility`: on load (and on every "Go / Apply") it scatters the number of points given by "Test points" (default 500) randomly within "Test radius (km)" (default 5) of a fixed origin — marked with a yellow cross — asks `/visibility` whether each is visible from that origin, and plots them green (visible) or red (not). Both fields can also be set via URL params (`?points=20&testRadius=2`). (An earlier version plotted a LoRa traceroute log from `p5js/data/log.csv` instead — that loading code is commented out in `setup()`/`preload()` rather than deleted, in case it's wanted again.)
+
+Deeper zooms need more tiles to cover the same screen area (e.g. 224 vs 56), so there's a brief window after zooming where the new zoom's tiles are still fetching. Rather than leaving that blank, `draw()` first draws the last zoom that *fully* loaded, scaled to fit the current view, underneath the current zoom's tiles — so zooming shows a blurry-but-present placeholder instead of a flash of grey.
+
+The actual tile *request* on scroll-wheel zoom is debounced (150ms): a continuous scroll gesture fires many wheel events, each passing through an intermediate zoom level on the way to wherever scrolling stops, and requesting tiles on every single one of them would queue a full fetch+render batch per level passed through — leaving the zoom you actually land on stuck behind several already-irrelevant batches for several seconds. `zoomLevel`/`centerX`/`centerY` still update and redraw immediately on every event (so the placeholder above keeps the view responsive); only the network request waits for scrolling to pause.
+
+A trackpad pinch gesture fires wheel events fast enough to swing `zoomLevel` many levels in one frame (e.g. 18 → 1) before `previousZoom` catches up. The placeholder draw's scale factor is `2^(zoomLevel - previousZoom)`, and when that gap is large, the implied tile size collapses toward zero — `tilesAcross`/`tilesDown` (`ceil(viewportSize / tileSize)`) explodes into the hundreds of thousands, and the nested tile loop that's normally a few dozen iterations becomes billions, hanging or crashing the tab. `tileRangeForZoom` caps the tile count at `MAX_PLACEHOLDER_TILES` (64) as a hard backstop, and `draw()` skips the placeholder pass entirely once the gap exceeds 6 levels — at that point one old tile would cover most of the screen at essentially no useful detail anyway, so there's nothing worth approximating.
 
 Its "Export SVG" button merges every tile currently on screen into a single flat SVG — reusing each tile's already-fetched markup, stripped of its outer `<svg>` wrapper and re-placed in a `<g transform="translate(...)">` at the screen position it was drawn at — plus the visible points, and downloads it as one seamless vector file (not a screenshot).
+
+### How line-of-sight is calculated
+
+`/viewshed` and `/visibility` are two views onto the same underlying test, implemented once in `lineOfSightAngle`/`lineOfSightAngleAtElevation` and reused by both routes. The core idea: walk outward from the observer along a bearing, and at each point compute the *elevation angle* from the observer to that point — the angle above (or below) the horizontal that you'd have to look. A point is visible only if nothing closer along that same line has a steeper (larger) angle, because anything steeper sticks up further into your view and blocks whatever's behind it.
+
+```
+elevation
+   ^
+   |                                            *  T2 — visible: its angle is
+   |                                       *        *steeper* than the hill's,
+   |                                  *            so the line to T2 clears it
+   |                             *  <- line of sight, observer to T2
+   |                        *
+   |                   *
+   |              *
+   |         *  <- line of sight, observer to the hilltop
+   |    .--^--.
+   |   /  hill \                                  x  T1 — NOT visible: its
+   |  /         \                            - - -    angle is *shallower*
+   | o  observer  \                     - - -          than the hill's, so
+   | (ground + eye  \               - -                the hill blocks it
+   |  height)         \         - -
+   +--------------------+---------+----------------------------------> distance
+                       hill        T1                  T2
+```
+
+Each point's apparent height isn't just its raw elevation, though — Earth curves away beneath a straight line of sight, so a point far enough away is effectively lower than its elevation alone would suggest. `curvatureDropM` subtracts that drop (scaled up by 7/6 by default, the standard approximation for atmospheric refraction bending the ray slightly back toward the surface) before the angle is computed:
+
+```
+   o ─────────────────────────────────────────────  •   straight chord — what
+    \                                            ,·'      the distance/height
+     \                                       ,·'           numbers alone imply
+      \                                  ,·'
+       \                             ,·'    ╲  actual line of sight: bends
+        \                        ,·'          ╲ down to follow the curve, so
+         \___________________,·'                a point right at the chord's
+              observer                            height reads as *lower* —
+                                                    drop = d² / (2 · R_eff)
+```
+
+`/viewshed` (scan outward, find the boundary) and `/visibility` (check specific points) both run this same sweep — they just ask a different question of it:
+
+```
+/viewshed: for one bearing, keep marching out to `radius`, remembering          /visibility: for one target, march the points strictly between
+the *furthest* point whose angle ever became the new running maximum.          observer and target (same running-max sweep), then check whether
+                                                                                 the target's own angle clears that maximum.
+
+        *                                                                              x  target (checked once, at its exact distance)
+       /  <- furthest point that set a new max angle becomes a ring vertex             ↑
+      *                                                                                | line of sight from observer
+  .--^--.        ↑ scanning outward, bearing fixed, distance increasing            .--^--.    ↑ same sweep, but only out to the target's
+ /       \       o observer                                                       /       \   o observer    own distance, then one angle check
+```
+
+Because both are discretized (a finite number of bearings/steps, a finite sampling density along each path), they can disagree right at a visibility boundary — see the note at the end of the `/visibility` section below for why, and how to tighten it up.
+
+### Viewshed (line-of-sight horizon)
+
+```
+GET /viewshed?lon=<longitude>&lat=<latitude>&radius=<km>&directions=<n>&steps=<n>&observerHeight=<m>&targetHeight=<m>&refraction=<bool>
+```
+
+| Parameter | Required | Default | Description |
+|-----------|----------|---------|-------------|
+| `lon` | yes | — | Observer longitude in decimal degrees |
+| `lat` | yes | — | Observer latitude in decimal degrees |
+| `radius` | no | 30 | Maximum search radius in kilometres, 0.5–200 |
+| `directions` | no | 360 | Number of bearings sampled around the observer, 8–720 |
+| `steps` | no | 256 | Samples taken along each bearing out to `radius`, 8–2000 |
+| `observerHeight` | no | 1.7 | Height (metres) added to the observer's ground elevation, e.g. eye height |
+| `targetHeight` | no | 0 | Height (metres) added to every sampled target point, e.g. to ask "can I see the top of a 10m mast" |
+| `refraction` | no | true | Whether to apply the standard 7/6-Earth-radius correction for atmospheric refraction (pass `false` for pure geometric line of sight) |
+
+For each bearing, marches outward sampling elevation (bilinearly interpolated, same as the other endpoints) and tracks the point with the steepest line-of-sight angle seen so far — a point further out is only "visible" if its angle clears every closer point along that bearing, accounting for Earth's curvature. The single furthest visible point per bearing becomes one vertex of the returned shape. No-data samples (e.g. open sea beyond the loaded tiles) are treated as sea level rather than a gap, so looking out to sea still gives a sensible curvature-limited range.
+
+Returns a GeoJSON `Feature` with a `Polygon` geometry — the boundary of furthest visibility in every direction:
+
+```json
+{ "type": "Feature", "properties": { "lon": -2.7036, "lat": 56.2208, "radiusKm": 30, ... },
+  "geometry": { "type": "Polygon", "coordinates": [[[lon, lat], ...]] } }
+```
+
+Note the shape can be sharply non-convex — a hillside 200m away can legitimately be the furthest visible point in one direction while an adjacent bearing looking down an open valley or coastline sees 20+ km, with no smooth transition between them.
+
+### Visibility (specific points)
+
+```
+GET /visibility?lon=<longitude>&lat=<latitude>&targets=<lon,lat[,altitude]|...>&observerHeight=<m>&targetHeight=<m>&refraction=<bool>&stepsPerKm=<n>
+POST /visibility   { "lon", "lat", "targets": [[lon, lat], [lon, lat, altitude], ...], "observerHeight", "targetHeight", "refraction", "stepsPerKm" }
+```
+
+The other side of the same line-of-sight test as `/viewshed` (both share the same `lineOfSightAngle`/`lineOfSightAngleAtElevation` code): instead of scanning outward to find the visibility boundary, checks specific target points against the observer.
+
+GET packs `targets` into the query string, which is fine for a handful of points but overflows the server's request-header limit (HTTP 431) somewhere in the low hundreds. POST takes the same data as a JSON body instead, with no such limit — use it for any non-trivial target list (the demo page's 500-point test uses POST).
+
+| Parameter | Required | Default | Description |
+|-----------|----------|---------|-------------|
+| `lon` / `lat` | yes | — | Observer position |
+| `targets` | yes | — | `\|`-separated list of targets, each `lon,lat` or `lon,lat,altitude` |
+| `observerHeight` | no | 1.7 | Height (metres) added to the observer's ground elevation |
+| `targetHeight` | no | 0 | Height (metres) added to a target's ground elevation — only used for targets *without* an explicit altitude |
+| `refraction` | no | true | Same 7/6-Earth-radius correction as `/viewshed` |
+| `stepsPerKm` | no | 10 | Samples per kilometre along each observer→target path, 1–50 |
+
+A target given as `lon,lat` is assumed to sit at ground level — whatever that happens to be at that point — plus `targetHeight`. A target given as `lon,lat,altitude` is pinned to that absolute altitude instead (e.g. a drone at a known height), ignoring both the sampled terrain and `targetHeight` for that point.
+
+```json
+{ "lon": -2.7036, "lat": 56.2208, "observerHeight": 1.7, "targetHeight": 0, "refraction": true,
+  "results": [
+    { "lon": -2.9, "lat": 56.05, "distanceKm": 22.556, "visible": true, "groundElevation": 0, "altitude": 500 }
+  ] }
+```
+
+Because `/viewshed` and `/visibility` sample at different resolutions (a fixed step count over a fixed radius vs. a fixed density per path, since every target is a different distance away), they can disagree right at a visibility boundary — a point `/viewshed` reports as its furthest-visible in some direction might come back `visible: false` here at the default `stepsPerKm`, because the finer sampling along that specific path catches an intermediate obstruction the coarser radial scan stepped over. Raising `stepsPerKm` (or lowering `/viewshed`'s `steps`) narrows that gap; neither endpoint is "wrong", they're both discretized approximations of a continuous problem.
 
 ## Data
 

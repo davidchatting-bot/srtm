@@ -10,35 +10,44 @@ const MIN_ZOOM = 1;
 const MAX_ZOOM = 18;
 
 let zoomLevel = 13;
+let previousZoom = null;    // last zoom whose tiles were *fully* loaded — drawn
+                             // scaled as a placeholder under the current zoom so
+                             // a zoom change doesn't flash to blank grey while
+                             // the new zoom's (more numerous) tiles fetch
 let centerX, centerY;       // fractional tile coords at the current zoomLevel
 let tileCache = {};         // keyed "z/x/y" -> { img: p5.Image|null, status }
 let isDragging = false;
 let lastDragX, lastDragY;
 let lastDrawnTiles = [];    // tiles actually placed on screen last frame, for export
 
-let csvRows;                // loaded in preload(), parsed in setup()
-let points = [];            // { lat, lon, rssi, hops }
+// let csvRows;                // loaded in preload(), parsed in setup()
+let points = [];            // { lat, lon, visible }
+
+const VISIBILITY_ORIGIN = { lat: 56.2483517, lon: -2.7796033 };
 
 function preload() {
-  csvRows = loadStrings('/data/log.csv');
+  // csvRows = loadStrings('/data/log.csv');
 }
 
 function setup() {
   createCanvas(windowWidth, windowHeight).parent('map');
 
-  for (let i = 1; i < csvRows.length; i++) {
-    const cols = csvRows[i].split(',');
-    if (cols.length < 6) continue;
-    points.push({
-      result: cols[0],
-      hops: parseInt(cols[1]),
-      rssi: parseFloat(cols[2]),
-      lat: parseFloat(cols[4]),
-      lon: parseFloat(cols[5]),
-    });
-  }
-
+  // for (let i = 1; i < csvRows.length; i++) {
+  //   const cols = csvRows[i].split(',');
+  //   if (cols.length < 6) continue;
+  //   points.push({
+  //     result: cols[0],
+  //     hops: parseInt(cols[1]),
+  //     rssi: parseFloat(cols[2]),
+  //     lat: parseFloat(cols[4]),
+  //     lon: parseFloat(cols[5]),
+  //   });
+  // }
   const params = new URLSearchParams(window.location.search);
+  if (params.get('points')) document.getElementById('test-points-input').value = params.get('points');
+  if (params.get('testRadius')) document.getElementById('test-radius-input').value = params.get('testRadius');
+  testVisibilityAroundOrigin();
+
   const lon = parseFloat(params.get('lon')) || parseFloat(document.getElementById('lon-input').value);
   const lat = parseFloat(params.get('lat')) || parseFloat(document.getElementById('lat-input').value);
   centerX = lonToTileX(lon, zoomLevel);
@@ -47,6 +56,47 @@ function setup() {
   requestMissingTiles();
   noLoop();
   redraw();
+}
+
+// Scatters a random number of points (the "Test points" field) within
+// "Test radius (km)" of VISIBILITY_ORIGIN (uniform over the disk's area, not
+// just the radius), then asks /visibility whether each is visible from that
+// origin — exercising the same line-of-sight code as /viewshed, just
+// point-by-point instead of scanning for the boundary.
+function testVisibilityAroundOrigin() {
+  const numPoints = Math.max(1, parseInt(document.getElementById('test-points-input').value) || 500);
+  const radiusKm = Math.max(0.1, parseFloat(document.getElementById('test-radius-input').value) || 5);
+
+  const targets = [];
+  for (let i = 0; i < numPoints; i++) {
+    const distKm = Math.sqrt(Math.random()) * radiusKm;
+    const bearing = Math.random() * 2 * Math.PI;
+    const kmPerDegLat = 111.32;
+    const kmPerDegLon = 111.32 * Math.cos((VISIBILITY_ORIGIN.lat * Math.PI) / 180);
+    targets.push({
+      lat: VISIBILITY_ORIGIN.lat + (distKm * Math.cos(bearing)) / kmPerDegLat,
+      lon: VISIBILITY_ORIGIN.lon + (distKm * Math.sin(bearing)) / kmPerDegLon,
+    });
+  }
+
+  // POST with a JSON body, not GET with a query string — a few hundred
+  // targets packed into a URL overflows the server's request-header limit
+  // (HTTP 431); POST has no such limit.
+  fetch('/visibility', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      lon: VISIBILITY_ORIGIN.lon,
+      lat: VISIBILITY_ORIGIN.lat,
+      targets: targets.map(t => [t.lon, t.lat]),
+    }),
+  })
+    .then(res => res.json())
+    .then(data => {
+      points = data.results.map(r => ({ lat: r.lat, lon: r.lon, visible: r.visible }));
+      redraw();
+    })
+    .catch(err => console.error('visibility test failed', err));
 }
 
 // Builds the tile URL query string from the control panel inputs — same
@@ -73,13 +123,39 @@ function tileToScreen(tx, ty) {
   };
 }
 
+// The tile range (in zoom-z tile coordinates) needed to cover the current
+// view, given the view's centre is expressed in zoomLevel's units. scale
+// converts a zoom-z tile coordinate into zoomLevel's fractional units —
+// >1 when z is a shallower (more zoomed out) level being scaled up to fill
+// the same screen area, <1 when scaling a deeper level down.
+//
+// Safety cap: if z is many levels away from zoomLevel (e.g. a fast pinch
+// gesture firing dozens of wheel events drove zoomLevel from 18 to 1 in one
+// frame, while a placeholder pass still references previousZoom=18), scale
+// collapses toward 0 and tilesAcross/tilesDown — ceil(width/drawSize) —
+// explodes into the hundreds of thousands. That's a nested loop with
+// billions of iterations, which hangs/crashes the tab. MAX_PLACEHOLDER_TILES
+// keeps the tile count bounded no matter how extreme the zoom gap gets.
+const MAX_PLACEHOLDER_TILES = 64;
+function tileRangeForZoom(z) {
+  const scale = Math.pow(2, zoomLevel - z);
+  const drawSize = TILE_SIZE * scale;
+  const cx = centerX / scale;
+  const cy = centerY / scale;
+  const tilesAcross = Math.min(MAX_PLACEHOLDER_TILES, Math.ceil(width / drawSize) + 2);
+  const tilesDown = Math.min(MAX_PLACEHOLDER_TILES, Math.ceil(height / drawSize) + 2);
+  return {
+    scale, drawSize,
+    tx0: Math.floor(cx - tilesAcross / 2),
+    ty0: Math.floor(cy - tilesDown / 2),
+    tilesAcross, tilesDown,
+    maxTile: Math.pow(2, z),
+  };
+}
+
 function requestMissingTiles() {
   const query = buildTileQuery();
-  const tilesAcross = Math.ceil(width / TILE_SIZE) + 2;
-  const tilesDown = Math.ceil(height / TILE_SIZE) + 2;
-  const tx0 = Math.floor(centerX - tilesAcross / 2);
-  const ty0 = Math.floor(centerY - tilesDown / 2);
-  const maxTile = Math.pow(2, zoomLevel);
+  const { tx0, ty0, tilesAcross, tilesDown, maxTile } = tileRangeForZoom(zoomLevel);
 
   for (let dx = 0; dx <= tilesAcross; dx++) {
     for (let dy = 0; dy <= tilesDown; dy++) {
@@ -118,47 +194,81 @@ function fetchTile(url, key) {
     .catch(() => { tileCache[key] = { img: null, svgText: null, status: 'error' }; });
 }
 
-function draw() {
-  background(128);
+// Draws every loaded tile at zoom z that falls within the current view.
+// Returns how many of the needed tiles were actually loaded, so draw() can
+// tell whether this zoom is fully ready yet. Only records lastDrawnTiles
+// (used by exportSVG) when drawing the real current zoom, not a placeholder.
+function drawTilesAtZoom(z, query, isCurrent) {
+  const { scale, drawSize, tx0, ty0, tilesAcross, tilesDown, maxTile } = tileRangeForZoom(z);
+  let loadedCount = 0, neededCount = 0;
 
-  const query = buildTileQuery();
-  const tilesAcross = Math.ceil(width / TILE_SIZE) + 2;
-  const tilesDown = Math.ceil(height / TILE_SIZE) + 2;
-  const tx0 = Math.floor(centerX - tilesAcross / 2);
-  const ty0 = Math.floor(centerY - tilesDown / 2);
-  const maxTile = Math.pow(2, zoomLevel);
-
-  lastDrawnTiles = [];
   for (let dx = 0; dx <= tilesAcross; dx++) {
     for (let dy = 0; dy <= tilesDown; dy++) {
       const tx = tx0 + dx;
       const ty = ty0 + dy;
       if (ty < 0 || ty >= maxTile) continue;
+      neededCount++;
       const wtx = ((tx % maxTile) + maxTile) % maxTile;
-      const key = `${zoomLevel}/${wtx}/${ty}/${query}`;
+      const key = `${z}/${wtx}/${ty}/${query}`;
       const entry = tileCache[key];
       if (!entry || entry.status !== 'loaded') continue;
+      loadedCount++;
 
-      const { x, y } = tileToScreen(tx, ty);
-      image(entry.img, x, y, TILE_SIZE, TILE_SIZE);
-      lastDrawnTiles.push({ screenX: x, screenY: y, svgText: entry.svgText });
+      const { x, y } = tileToScreen(tx * scale, ty * scale);
+      image(entry.img, x, y, drawSize, drawSize);
+      if (isCurrent) lastDrawnTiles.push({ screenX: x, screenY: y, svgText: entry.svgText });
     }
   }
+  return { loadedCount, neededCount };
+}
+
+function draw() {
+  background(128);
+  lastDrawnTiles = [];
+  const query = buildTileQuery();
+
+  // Show the last fully-loaded zoom (scaled) underneath while the current
+  // zoom's tiles are still arriving, instead of flashing to blank grey. Skip
+  // it if the gap is too large to be a useful approximation anyway (e.g. a
+  // fast pinch gesture jumping many levels at once) — at that point one old
+  // tile would cover a huge area at essentially no visual detail, and we'd
+  // rather not even approach the MAX_PLACEHOLDER_TILES cap.
+  if (previousZoom !== null && previousZoom !== zoomLevel && Math.abs(previousZoom - zoomLevel) <= 6) {
+    drawTilesAtZoom(previousZoom, query, false);
+  }
+
+  const { loadedCount, neededCount } = drawTilesAtZoom(zoomLevel, query, true);
+  if (neededCount > 0 && loadedCount === neededCount) previousZoom = zoomLevel;
 
   drawPoints();
   updateInfo();
 }
 
-// LoRa traceroute points: green for a direct/successful hop, red for a
-// failed one. Other columns (RSSI, SNR, hop count) aren't shown yet.
+// Visibility test points: green if visible from VISIBILITY_ORIGIN, red if not.
 function pointColor(p) {
-  return p.result === 'DIRECT' ? color(50, 220, 80) : color(220, 50, 50);
+  return p.visible ? color(50, 220, 80) : color(220, 50, 50);
+}
+
+// Screen position of VISIBILITY_ORIGIN at the current view, or null if off-screen.
+function originScreenPos() {
+  const tx = lonToTileX(VISIBILITY_ORIGIN.lon, zoomLevel);
+  const ty = latToTileY(VISIBILITY_ORIGIN.lat, zoomLevel);
+  const { x, y } = tileToScreen(tx, ty);
+  if (x < -10 || x > width + 10 || y < -10 || y > height + 10) return null;
+  return { x, y };
+}
+
+function drawOriginCross(x, y) {
+  stroke(255, 220, 0);
+  strokeWeight(2);
+  line(x - 8, y, x + 8, y);
+  line(x, y - 8, x, y + 8);
+  noStroke();
 }
 
 function drawPoints() {
   noStroke();
   for (const p of points) {
-    if (isNaN(p.lat) || isNaN(p.lon)) continue;
     const tx = lonToTileX(p.lon, zoomLevel);
     const ty = latToTileY(p.lat, zoomLevel);
     const { x, y } = tileToScreen(tx, ty);
@@ -167,6 +277,9 @@ function drawPoints() {
     fill(pointColor(p));
     circle(x, y, 6);
   }
+
+  const origin = originScreenPos();
+  if (origin) drawOriginCross(origin.x, origin.y);
 }
 
 // --- Interaction ---
@@ -179,6 +292,7 @@ function goToLocation(event) {
     centerX = lonToTileX(lon, zoomLevel);
     centerY = latToTileY(lat, zoomLevel);
   }
+  testVisibilityAroundOrigin();
   requestMissingTiles();
   redraw();
 }
@@ -205,15 +319,28 @@ function mouseDragged() {
   redraw();
 }
 
+let zoomRequestTimer = null;
+
 // Zooms toward/away from the view centre (not cursor-anchored — kept simple).
+// A continuous scroll gesture fires many wheel events in quick succession —
+// each one passes through an intermediate zoom level on the way to wherever
+// scrolling stops. Updating zoomLevel and redrawing on every event keeps the
+// view responsive (drawTilesAtZoom's placeholder fallback shows something
+// immediately), but actually requesting tiles on every single event would
+// queue a full fetch+render batch for every zoom level passed through, not
+// just the one the user lands on — leaving the real target zoom's tiles
+// stuck behind several already-irrelevant batches for seconds. Debouncing
+// the request to fire once scrolling has paused avoids that entirely.
 function mouseWheel(event) {
   const lon = tileXToLon(centerX, zoomLevel);
   const lat = tileYToLat(centerY, zoomLevel);
   zoomLevel = constrain(zoomLevel + (event.deltaY > 0 ? -1 : 1), MIN_ZOOM, MAX_ZOOM);
   centerX = lonToTileX(lon, zoomLevel);
   centerY = latToTileY(lat, zoomLevel);
-  requestMissingTiles();
   redraw();
+
+  clearTimeout(zoomRequestTimer);
+  zoomRequestTimer = setTimeout(requestMissingTiles, 150);
   return false; // prevent page scroll
 }
 
@@ -250,13 +377,20 @@ async function exportSVG() {
 
     let pointsMarkup = '';
     for (const p of points) {
-      if (isNaN(p.lat) || isNaN(p.lon)) continue;
       const tx = lonToTileX(p.lon, zoomLevel);
       const ty = latToTileY(p.lat, zoomLevel);
       const { x, y } = tileToScreen(tx, ty);
       if (x < -10 || x > width + 10 || y < -10 || y > height + 10) continue;
       const c = pointColor(p);
       pointsMarkup += `<circle cx="${x.toFixed(2)}" cy="${y.toFixed(2)}" r="3" fill="rgb(${red(c)},${green(c)},${blue(c)})"/>`;
+    }
+
+    const origin = originScreenPos();
+    if (origin) {
+      pointsMarkup += `<g stroke="rgb(255,220,0)" stroke-width="2">` +
+        `<line x1="${(origin.x - 8).toFixed(2)}" y1="${origin.y.toFixed(2)}" x2="${(origin.x + 8).toFixed(2)}" y2="${origin.y.toFixed(2)}"/>` +
+        `<line x1="${origin.x.toFixed(2)}" y1="${(origin.y - 8).toFixed(2)}" x2="${origin.x.toFixed(2)}" y2="${(origin.y + 8).toFixed(2)}"/>` +
+        `</g>`;
     }
 
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">` +
