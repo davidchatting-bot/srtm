@@ -168,7 +168,7 @@ The raw-data counterpart to `/terrain`: instead of a rendered image, returns a J
 ### Terrain profile
 
 ```
-GET /line.svg?lon1=<longitude>&lat1=<latitude>&lon2=<longitude>&lat2=<latitude>&curved=<bool>&samples=<n>&width=<px>&height=<px>
+GET /line.svg?lon1=<longitude>&lat1=<latitude>&lon2=<longitude>&lat2=<latitude>&curved=<bool>&samples=<n>&width=<px>&height=<px>&heightScale=<n>
 ```
 
 | Parameter | Required | Default | Description |
@@ -178,10 +178,13 @@ GET /line.svg?lon1=<longitude>&lat1=<latitude>&lon2=<longitude>&lat2=<latitude>&
 | `curved` | no | true | Whether to add Earth's curvature (see below) or plot a flat cross-section ignoring it |
 | `samples` | no | 200 | Number of elevation samples along the path, 8–2000 |
 | `width` / `height` | no | 800 / 200 | Output SVG dimensions in pixels, 100–2000 / 50–5000 |
+| `heightScale` | no | 1 | Terrain-relief exaggeration factor, 0.001–100000 (see below) |
 
-Returns an SVG line chart of elevation along the great-circle path from the start point to the end point, drawn true to scale: one metres-per-pixel factor, derived from `width` and the distance between the points, applies to both axes, so the chart isn't vertically exaggerated the way a conventional elevation-profile tool would be. Sea level sits at the bottom edge; anything that rises higher than `height` at that scale — real relief, or the curvature drop below — is clipped by the canvas rather than the chart rescaling itself to fit, so pick a taller `height` to see subtle curvature over long distances. Missing data along the path (e.g. no `.hgt` tile loaded for that section) is treated as sea level rather than leaving a gap.
+Returns an SVG line chart of elevation along the great-circle path from the start point to the end point, drawn true to scale by default: one metres-per-pixel factor, derived from `width` and the distance between the points, applies to the horizontal axis and to sea level's curved position — the geometric fact of where the curve puts sea level isn't something the chart distorts. Real terrain relief is drawn above that sea-level baseline at the same true scale by default too, unless `heightScale` says otherwise. Sea level sits at the bottom edge when `curved` is off; anything that rises higher than `height` at its respective scale is clipped by the canvas rather than the chart rescaling itself to fit, so pick a taller `height` to see subtle relief or long-distance curvature. Missing data along the path (e.g. no `.hgt` tile loaded for that section) is treated as sea level rather than leaving a gap.
 
-When `curved` is enabled, the line starts flat at the start point and progressively drops away as distance from it grows — `R·(1 − cos(d/R))` metres at distance `d`, where `R` is Earth's radius — the same effect that makes distant things sink below the horizon as you get further from a fixed vantage point. `curved=false` plots the raw elevations instead, ignoring Earth's shape entirely.
+`heightScale` exaggerates real terrain relief only — it never touches the horizontal (distance) scale, nor sea level's curved position, only how many pixels a metre of *elevation above sea level* maps to, e.g. `heightScale=100` draws every metre of relief 100x taller than true scale while the curvature stays geometrically accurate. This is useful for making subtle terrain visible without needing an enormous `height` to match the true horizontal scale, and without exaggerating (and so misrepresenting) the curvature itself — just remember to raise `height` too if the exaggerated relief would otherwise be clipped.
+
+When `curved` is enabled, each sample has the exact sagitta added — the height an arc rises above its chord, zero at both endpoints and maximum at the midpoint. A chord between two points on a sphere lies inside it, so the true surface between them actually rises above a straight line drawn between them by this amount (the same effect that limits radio/visual line-of-sight over distance); `curved=false` plots the raw elevations instead, ignoring Earth's shape entirely.
 
 ### Line-of-sight
 

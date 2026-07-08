@@ -1070,21 +1070,27 @@ app.post("/visibility", (req, res) => {
   }
 });
 
-// How far (metres) the actual curved surface sits below a flat tangent plane
-// drawn from the start point and extended out to distance `d` km along the
-// path — zero at the start, growing as distance increases (the "things sink
-// below the horizon" effect of a single fixed vantage point, as opposed to a
-// symmetric dip/bulge relative to a chord between two arbitrary points).
+// The sagitta (metres) — the height an arc rises above its chord — of the
+// curved surface above the straight chord between two points, at distance
+// `d` km from the first. Zero at both ends, maximum at the midpoint. A chord
+// between two points on a sphere lies inside the sphere, so the true surface
+// between them sits above it by this amount (the same "Earth gets in the
+// way" effect used in line-of-sight/RF path calculations) — added to
+// elevation, not subtracted.
 //
-// Same circle geometry as a chord sagitta, just anchored at one end instead
-// of the midpoint: place the start point on a circle of radius R at angle 0,
-// so its local tangent plane is the vertical line x=R; a point at arc-
-// distance d is at angle theta=d/R, i.e. x=R*cos(theta) — R*(1-cos(theta))
-// short of the tangent line. Reduces to the familiar d²/(2R) approximation
-// for small theta (Taylor-expand cos), but stays exact at any distance.
-function startTangentDropM(d) {
-  const theta = d / EARTH_RADIUS_KM;
-  return EARTH_RADIUS_KM * (1 - Math.cos(theta)) * 1000;
+// Exact, not the small-angle d1*d2/(2R) approximation: place both points and
+// the sample point on a circle of radius R, and rotate so the chord is
+// vertical (equidistant in x from centre) — the sample's perpendicular
+// distance from that chord is then just the difference in its x-coordinate,
+// R*cos(phi), from the chord's, R*cos(halfAngle), where phi is the sample's
+// angle from the arc's midpoint. Reduces to d1*d2/(2R) for small halfAngle
+// (Taylor-expand cos), but stays accurate at any distance, including a
+// meaningful fraction of Earth's circumference where the small-angle version
+// measurably drifts.
+function chordSagittaM(d, totalKm) {
+  const halfAngle = totalKm / (2 * EARTH_RADIUS_KM);
+  const phi = d / EARTH_RADIUS_KM - halfAngle;
+  return EARTH_RADIUS_KM * (Math.cos(phi) - Math.cos(halfAngle)) * 1000;
 }
 
 app.get("/line.svg", (req, res) => {
@@ -1099,6 +1105,7 @@ app.get("/line.svg", (req, res) => {
     const samples = Math.min(2000, Math.max(8, parseInt(req.query.samples) || 200));
     const width = Math.min(2000, Math.max(100, parseInt(req.query.width) || 800));
     const height = Math.min(5000, Math.max(50, parseInt(req.query.height) || 200));
+    const heightScale = Math.min(100000, Math.max(0.001, parseFloat(req.query.heightScale) || 1));
 
     const totalKm = haversineDistanceKm(lon1, lat1, lon2, lat2);
     const bearing = initialBearing(lon1, lat1, lon2, lat2);
@@ -1109,24 +1116,29 @@ app.get("/line.svg", (req, res) => {
       Math.max(lon1, lon2) + marginDeg, Math.max(lat1, lat2) + marginDeg
     );
 
-    // True to scale: one metres-per-pixel factor, derived from width/distance,
-    // applies to both axes — so the drawn cross-section isn't vertically
-    // exaggerated the way a conventional elevation-profile chart would be.
-    // Sea level sits at the bottom edge; anything that rises higher than
-    // `height` at that scale (real relief plus, if curved, the curvature
-    // bulge) is simply clipped by the viewBox rather than the chart
-    // rescaling itself to fit — pass a taller height to see more of it.
-    // Missing data (e.g. no .hgt tile loaded for part of the path) falls back
-    // to sea level rather than leaving a gap in the profile.
-    const scale = width / (totalKm * 1000 || 1); // px per metre
+    // True to scale by default: one metres-per-pixel factor, derived from
+    // width/distance, applies to the horizontal axis and (unscaled) to sea
+    // level's curved position — the geometric fact of where the curve puts
+    // sea level isn't something heightScale should be allowed to distort.
+    // heightScale only stretches how tall real terrain relief is drawn above
+    // that sea-level baseline, e.g. to make subtle hills visible without
+    // exaggerating the curvature itself. Sea level sits at the bottom edge
+    // when curved is off; anything that rises higher than `height` at its
+    // respective scale is simply clipped by the viewBox rather than the
+    // chart rescaling itself to fit — pass a taller height to see more of
+    // it. Missing data (e.g. no .hgt tile loaded for part of the path) falls
+    // back to sea level rather than leaving a gap in the profile.
+    const scale = width / (totalKm * 1000 || 1); // px per metre, horizontal
+    const yScale = scale * heightScale; // px per metre, vertical — terrain relief only
 
     const points = new Array(samples);
     for (let i = 0; i < samples; i++) {
       const d = (i / (samples - 1)) * totalKm;
       const { lon, lat } = destinationPoint(lon1, lat1, bearing, d);
       const elev = elevationOrSeaLevel(cache, lon, lat);
-      const y = curved ? elev - startTangentDropM(d) : elev;
-      points[i] = `${(d * 1000 * scale).toFixed(1)},${(height - y * scale).toFixed(1)}`;
+      const seaLevelPx = curved ? chordSagittaM(d, totalKm) * scale : 0; // always true to scale
+      const y = height - seaLevelPx - elev * yScale;
+      points[i] = `${(d * 1000 * scale).toFixed(1)},${y.toFixed(1)}`;
     }
 
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">` +
