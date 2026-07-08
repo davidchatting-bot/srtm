@@ -462,20 +462,13 @@ function smoothPathD(points, closed, scale) {
 // --- Routes ---
 
 app.get("/info", (req, res) => {
-  const files = fs.readdirSync(DATA_DIR).filter(f => f.endsWith(".hgt"));
-  if (files.length === 0) return res.status(404).json({ error: "No data" });
-  const { pixelDeg } = openHGT(path.join(DATA_DIR, files[0]));
+  const names = fs.readdirSync(DATA_DIR).filter(f => f.endsWith(".hgt"));
+  if (names.length === 0) return res.status(404).json({ error: "No data" });
+  const { pixelDeg } = openHGT(path.join(DATA_DIR, names[0]));
 
-  let minLon = Infinity, maxLon = -Infinity, minLat = Infinity, maxLat = -Infinity;
-  for (const f of files) {
-    const b = parseTileBounds(f);
-    minLon = Math.min(minLon, b.minLon);
-    maxLon = Math.max(maxLon, b.maxLon);
-    minLat = Math.min(minLat, b.minLat);
-    maxLat = Math.max(maxLat, b.maxLat);
-  }
+  const files = names.map(name => ({ name, region: parseTileBounds(name) }));
 
-  res.json({ pixelDeg, files, region: { minLon, maxLon, minLat, maxLat } });
+  res.json({ pixelDeg, files });
 });
 
 app.get("/heightmap", (req, res) => {
