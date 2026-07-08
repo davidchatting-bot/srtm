@@ -2,6 +2,20 @@
 
 A Node.js/Express service that serves SRTM terrain elevation data as slippy map tiles, plus a p5.js isometric viewer that renders the terrain as a 3-D bar chart.
 
+## Data
+
+This service uses **NASA Shuttle Radar Topography Mission Global 1 arc second V003** data. A free NASA Earthdata account is required to download files.
+
+- Dataset: https://doi.org/10.5067/MEASURES/SRTM/SRTMGL1.003
+
+Files should follow the standard naming convention (e.g. `N51W001.hgt`).
+
+### Data license
+
+The SRTM dataset is freely available under the [EOSDIS Data Use Policy](https://www.earthdata.nasa.gov/engage/open-data-services-and-software/data-use-policy). Use requires the following citation:
+
+> NASA JPL (2013). *NASA Shuttle Radar Topography Mission Global 1 arc second* [Data set]. NASA Land Processes Distributed Active Archive Center. https://doi.org/10.5067/MEASURES/SRTM/SRTMGL1.003
+
 ## Setup
 
 Place SRTM `.hgt` files in a `data/` directory at the project root, then:
@@ -23,28 +37,6 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now srtm
 ```
 
-## Contour SVG cache
-
-`/contours.svg` and `/contour-tiles/:z/:x/:y.svg` are backed by a disk cache at `cache/` (gitignored, created on first use). Each request's parameters are hashed into a cache key; a hit is served straight off disk, a miss is computed as normal and then written to the cache before responding. Node still needs to be running to serve requests (cache misses fall through to the normal compute path, and there's no separate static-serving tier), but once an area has been requested it's cheap to re-serve, and you can pre-warm the cache for a demo area by just requesting it ahead of time (e.g. with `curl`, or by panning the slippy map yourself) so sharing the demo doesn't trigger a slow first render for the next viewer.
-
-The cache key includes every parameter that affects the output (location/tile coordinates, resolution, interval, stroke width, size), so different query strings never collide.
-
-### Pre-warming the cache
-
-`warm-cache.js` requests the same tile URLs `contours.html`'s slippy map would, for a range of zooms around a point, so they're already cached before you share the demo:
-
-```bash
-node warm-cache.js                                              # defaults to Anstruther, zooms 12-17, radius 2 tiles
-node warm-cache.js --lat 56.2208 --lon -2.7036 --zooms 12-17 --radius 2
-node warm-cache.js --base-url http://localhost:3000 --concurrency 6
-```
-
-It hits the running server over HTTP, so the server still needs to be up while warming. Once warmed, requests for that area come straight off disk regardless of who's asking.
-
-## Elevation encoding
-
-Tiles use 16-bit precision encoded across the R and G channels (`R << 8 | G`) over a fixed range of −500 m to 8500 m. The viewer decodes this as `(v16 / 65535) * 9000 − 500`.
-
 ## Viewer
 
 Open `http://localhost:3000` in a browser to see an isometric bar-chart of the terrain centred on San Francisco. Each bar represents one SRTM sample (~90 m for SRTM3, ~30 m for SRTM1). Bar height is proportional to elevation above sea level; colour is fixed: blue at sea level, green above. Drag to pan.
@@ -52,6 +44,20 @@ Open `http://localhost:3000` in a browser to see an isometric bar-chart of the t
 To change location or view radius edit the constants at the top of `p5js/sketch.js`.
 
 ## Endpoints
+
+### Data info
+
+```
+GET /info
+```
+
+Returns JSON describing the loaded SRTM data:
+
+```json
+{ "pixelDeg": 0.000833, "files": ["N37W123.hgt"] }
+```
+
+`pixelDeg` is the native sample spacing in degrees (1/1200 for SRTM3, 1/3600 for SRTM1). The viewer uses this to set the bar-chart resolution.
 
 ### Slippy map tiles
 
@@ -67,19 +73,7 @@ L.tileLayer('http://localhost:3000/tiles/{z}/{x}/{y}.png').addTo(map);
 
 Elevation is encoded as grayscale over a fixed range (−500 m to 8500 m) so neighbouring tiles are visually consistent. Areas with no data are transparent.
 
-### Data info
-
-```
-GET /info
-```
-
-Returns JSON describing the loaded SRTM data:
-
-```json
-{ "pixelDeg": 0.000833, "files": ["N37W123.hgt"] }
-```
-
-`pixelDeg` is the native sample spacing in degrees (1/1200 for SRTM3, 1/3600 for SRTM1). The viewer uses this to set the bar-chart resolution.
+Tiles use 16-bit precision encoded across the R and G channels (`R << 8 | G`) over that same −500 m to 8500 m range. The viewer decodes this as `(v16 / 65535) * 9000 − 500`.
 
 ### Bounding-box terrain image
 
@@ -147,17 +141,39 @@ Standard XYZ contour tiles, greyscale-encoded the same way as `/contours.svg`, w
 L.tileLayer('http://localhost:3000/contour-tiles/{z}/{x}/{y}.svg').addTo(map);
 ```
 
-A pannable/zoomable demo page using these tiles is available at `/contours.html` (`p5js/contours-sketch.js`) — a p5.js sketch, not Leaflet: it fetches each tile's SVG itself, decodes it into a `p5.Image` via a local blob URL (drawing straight from the server URL makes the browser fetch the same SVG twice), and draws tiles directly to the canvas with its own pan (drag) and zoom (scroll) handling, following the same tile-coordinate math as the isometric viewer's `sketch.js`. Scroll-wheel zoom is cursor-anchored like Google Maps/Leaflet — the lon/lat under the cursor is found before the zoom change and `centerX`/`centerY` are re-solved so that same point lands back under the cursor afterward, rather than drifting toward the view centre on every scroll.
+A pannable/zoomable demo page using these tiles is available at `/contours.html` (`p5js/contours-sketch.js`) — a p5.js sketch, not Leaflet: it fetches each tile's SVG itself, decodes it into a `p5.Image` via a local blob URL (drawing straight from the server URL makes the browser fetch the same SVG twice), and draws tiles directly to the canvas with its own pan (drag) handling, following the same tile-coordinate math as the isometric viewer's `sketch.js`.
 
-It also exercises `/visibility`: on load (and on every "Go / Apply") it scatters the number of points given by "Test points" (default 500) randomly within "Test radius (km)" (default 5) of a fixed origin — marked with a yellow cross — asks `/visibility` whether each is visible from that origin, and plots them green (visible) or red (not). Both fields can also be set via URL params (`?points=20&testRadius=2`). (An earlier version plotted a LoRa traceroute log from `p5js/data/log.csv` instead — that loading code is commented out in `setup()`/`preload()` rather than deleted, in case it's wanted again.)
+Zooming is via the +/- buttons (bottom-right, `zoomIn()`/`zoomOut()`) only — scroll-wheel and trackpad pinch are deliberately disabled. A fast pinch gesture fires many wheel events in one frame, which both (a) is how a zoom-jump crash was triggered (see below) and (b) is exactly the kind of multi-step-at-once interaction the buttons rule out by construction — each click is its own single zoom step. `mouseWheel` still returns `false` so the gesture doesn't fall through to the browser's own page-scroll or native pinch-zoom. Button zooms centre on the view middle (there's no cursor position to anchor to from a click); a `zoomBy()`/`zoomIn()`/`zoomOut()` API is exposed globally if cursor-anchored wheel zoom is ever wanted back.
+
+It also exercises `/visibility`: on load (and on every "Go / Apply") it scatters the number of points given by "Test points" (default 500) randomly within "Test radius (km)" (default 10) of a fixed origin — marked with a yellow cross — asks `/visibility` whether each is visible from that origin, and plots them green (visible) or red (not). Both fields can also be set via URL params (`?points=20&testRadius=2`).
+
+Press **D** to flip between that random visibility cloud and the LoRa traceroute log at `p5js/data/log.csv` (gitignored — green for a `DIRECT` result, red otherwise, normalised into the same `visible` field so the colouring/export code doesn't need to know which dataset is active). Both datasets stay loaded at all times; `D` just changes which one `points` mirrors. The bottom-left info readout shows which is active and how many points it has.
 
 Deeper zooms need more tiles to cover the same screen area (e.g. 224 vs 56), so there's a brief window after zooming where the new zoom's tiles are still fetching. Rather than leaving that blank, `draw()` first draws the last zoom that *fully* loaded, scaled to fit the current view, underneath the current zoom's tiles — so zooming shows a blurry-but-present placeholder instead of a flash of grey.
 
-The actual tile *request* on scroll-wheel zoom is debounced (150ms): a continuous scroll gesture fires many wheel events, each passing through an intermediate zoom level on the way to wherever scrolling stops, and requesting tiles on every single one of them would queue a full fetch+render batch per level passed through — leaving the zoom you actually land on stuck behind several already-irrelevant batches for several seconds. `zoomLevel`/`centerX`/`centerY` still update and redraw immediately on every event (so the placeholder above keeps the view responsive); only the network request waits for scrolling to pause.
+The actual tile *request* on each zoom step is debounced (150ms): rapidly clicking +/- repeatedly changes `zoomLevel` once per click, and requesting tiles on every single click would queue a full fetch+render batch per level passed through — leaving the zoom you actually land on stuck behind several already-irrelevant batches for several seconds. `zoomLevel`/`centerX`/`centerY` still update and redraw immediately on every click (so the placeholder below keeps the view responsive); only the network request waits for clicking to pause.
 
-A trackpad pinch gesture fires wheel events fast enough to swing `zoomLevel` many levels in one frame (e.g. 18 → 1) before `previousZoom` catches up. The placeholder draw's scale factor is `2^(zoomLevel - previousZoom)`, and when that gap is large, the implied tile size collapses toward zero — `tilesAcross`/`tilesDown` (`ceil(viewportSize / tileSize)`) explodes into the hundreds of thousands, and the nested tile loop that's normally a few dozen iterations becomes billions, hanging or crashing the tab. `tileRangeForZoom` caps the tile count at `MAX_PLACEHOLDER_TILES` (64) as a hard backstop, and `draw()` skips the placeholder pass entirely once the gap exceeds 6 levels — at that point one old tile would cover most of the screen at essentially no useful detail anyway, so there's nothing worth approximating.
+Originally zoom was scroll-wheel/pinch driven, and a fast trackpad pinch gesture firing many wheel events in one frame (e.g. swinging `zoomLevel` 18 → 1 before `previousZoom` caught up) crashed the tab: the placeholder draw's scale factor is `2^(zoomLevel - previousZoom)`, and when that gap is large the implied tile size collapses toward zero, so `tilesAcross`/`tilesDown` (`ceil(viewportSize / tileSize)`) explodes into the hundreds of thousands — turning a nested loop that's normally a few dozen iterations into billions. Scroll/pinch are now disabled specifically so a gesture can't drive `zoomLevel` across many steps in a single frame, but the same jump is still reachable by rapidly clicking a zoom button many times before a redraw catches up, so the fix stayed in place rather than being removed: `tileRangeForZoom` caps the tile count at `MAX_PLACEHOLDER_TILES` (64) as a hard backstop, and `draw()` skips the placeholder pass entirely once the gap exceeds 6 levels.
 
 Its "Export SVG" button merges every tile currently on screen into a single flat SVG — reusing each tile's already-fetched markup, stripped of its outer `<svg>` wrapper and re-placed in a `<g transform="translate(...)">` at the screen position it was drawn at — plus the visible points, and downloads it as one seamless vector file (not a screenshot).
+
+### Contour cache
+
+`/contours.svg` and `/contour-tiles/:z/:x/:y.svg` are backed by a disk cache at `cache/` (gitignored, created on first use). Each request's parameters are hashed into a cache key; a hit is served straight off disk, a miss is computed as normal and then written to the cache before responding. Node still needs to be running to serve requests (cache misses fall through to the normal compute path, and there's no separate static-serving tier), but once an area has been requested it's cheap to re-serve, and you can pre-warm the cache for a demo area by just requesting it ahead of time (e.g. with `curl`, or by panning the slippy map yourself) so sharing the demo doesn't trigger a slow first render for the next viewer.
+
+The cache key includes every parameter that affects the output (location/tile coordinates, resolution, interval, stroke width, size), so different query strings never collide.
+
+#### Pre-warming the cache
+
+`warm-cache.js` requests the same tile URLs `contours.html`'s slippy map would, for a range of zooms around a point, so they're already cached before you share the demo:
+
+```bash
+node warm-cache.js                                              # defaults to Anstruther, zooms 12-17, radius 2 tiles
+node warm-cache.js --lat 56.2208 --lon -2.7036 --zooms 12-17 --radius 2
+node warm-cache.js --base-url http://localhost:3000 --concurrency 6
+```
+
+It hits the running server over HTTP, so the server still needs to be up while warming. Once warmed, requests for that area come straight off disk regardless of who's asking.
 
 ### How line-of-sight is calculated
 
@@ -272,20 +288,6 @@ A target given as `lon,lat` is assumed to sit at ground level — whatever that 
 ```
 
 Because `/viewshed` and `/visibility` sample at different resolutions (a fixed step count over a fixed radius vs. a fixed density per path, since every target is a different distance away), they can disagree right at a visibility boundary — a point `/viewshed` reports as its furthest-visible in some direction might come back `visible: false` here at the default `stepsPerKm`, because the finer sampling along that specific path catches an intermediate obstruction the coarser radial scan stepped over. Raising `stepsPerKm` (or lowering `/viewshed`'s `steps`) narrows that gap; neither endpoint is "wrong", they're both discretized approximations of a continuous problem.
-
-## Data
-
-This service uses **NASA Shuttle Radar Topography Mission Global 1 arc second V003** data. A free NASA Earthdata account is required to download files.
-
-- Dataset: https://doi.org/10.5067/MEASURES/SRTM/SRTMGL1.003
-
-Files should follow the standard naming convention (e.g. `N51W001.hgt`).
-
-### Data license
-
-The SRTM dataset is freely available under the [EOSDIS Data Use Policy](https://www.earthdata.nasa.gov/engage/open-data-services-and-software/data-use-policy). Use requires the following citation:
-
-> NASA JPL (2013). *NASA Shuttle Radar Topography Mission Global 1 arc second* [Data set]. NASA Land Processes Distributed Active Archive Center. https://doi.org/10.5067/MEASURES/SRTM/SRTMGL1.003
 
 ## License
 

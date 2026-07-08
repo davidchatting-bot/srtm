@@ -20,29 +20,35 @@ let isDragging = false;
 let lastDragX, lastDragY;
 let lastDrawnTiles = [];    // tiles actually placed on screen last frame, for export
 
-// let csvRows;                // loaded in preload(), parsed in setup()
-let points = [];            // { lat, lon, visible }
+let csvRows;                // loaded in preload(), parsed in setup()
+let csvPoints = [];         // from p5js/data/log.csv — { lat, lon, visible }
+let cloudPoints = [];       // from testVisibilityAroundOrigin() — { lat, lon, visible }
+let activeDataset = 'cloud'; // 'cloud' or 'csv' — which of the above `points` mirrors
+let points = [];            // whichever dataset is active; draw()/exportSVG() just read this
 
 const VISIBILITY_ORIGIN = { lat: 56.2483517, lon: -2.7796033 };
 
 function preload() {
-  // csvRows = loadStrings('/data/log.csv');
+  csvRows = loadStrings('/data/log.csv');
 }
 
 function setup() {
   createCanvas(windowWidth, windowHeight).parent('map');
 
-  // for (let i = 1; i < csvRows.length; i++) {
-  //   const cols = csvRows[i].split(',');
-  //   if (cols.length < 6) continue;
-  //   points.push({
-  //     result: cols[0],
-  //     hops: parseInt(cols[1]),
-  //     rssi: parseFloat(cols[2]),
-  //     lat: parseFloat(cols[4]),
-  //     lon: parseFloat(cols[5]),
-  //   });
-  // }
+  for (let i = 1; i < csvRows.length; i++) {
+    const cols = csvRows[i].split(',');
+    if (cols.length < 6) continue;
+    csvPoints.push({
+      // Normalised to the same { lat, lon, visible } shape as the visibility
+      // cloud below, so pointColor()/drawPoints()/exportSVG() don't need to
+      // know which dataset is active — DIRECT reuses the same green/red
+      // visible/not-visible colouring as a "visible" reading.
+      visible: cols[0] === 'DIRECT',
+      lat: parseFloat(cols[4]),
+      lon: parseFloat(cols[5]),
+    });
+  }
+
   const params = new URLSearchParams(window.location.search);
   if (params.get('points')) document.getElementById('test-points-input').value = params.get('points');
   if (params.get('testRadius')) document.getElementById('test-radius-input').value = params.get('testRadius');
@@ -56,6 +62,18 @@ function setup() {
   requestMissingTiles();
   noLoop();
   redraw();
+}
+
+// Pressing D flips between the LoRa traceroute log (p5js/data/log.csv) and
+// the random /visibility test cloud. Both datasets stay loaded at all times
+// (testVisibilityAroundOrigin() keeps cloudPoints fresh in the background);
+// this just changes which one `points` mirrors.
+function keyPressed() {
+  if (key === 'd' || key === 'D') {
+    activeDataset = activeDataset === 'cloud' ? 'csv' : 'cloud';
+    points = activeDataset === 'cloud' ? cloudPoints : csvPoints;
+    redraw();
+  }
 }
 
 // Scatters a random number of points (the "Test points" field) within
@@ -93,7 +111,8 @@ function testVisibilityAroundOrigin() {
   })
     .then(res => res.json())
     .then(data => {
-      points = data.results.map(r => ({ lat: r.lat, lon: r.lon, visible: r.visible }));
+      cloudPoints = data.results.map(r => ({ lat: r.lat, lon: r.lon, visible: r.visible }));
+      if (activeDataset === 'cloud') points = cloudPoints;
       redraw();
     })
     .catch(err => console.error('visibility test failed', err));
@@ -321,39 +340,39 @@ function mouseDragged() {
 
 let zoomRequestTimer = null;
 
-// Zooms toward/away from the point under the cursor (matching Google Maps —
-// not the view centre): find the lon/lat currently under the mouse, change
-// zoom, then re-solve centerX/centerY so that same lon/lat lands back under
-// the cursor. Without this, zooming in on something off-centre drifts it
-// toward the middle of the view with every scroll, which feels wrong the
-// moment you compare it to literally any other map.
-//
-// A continuous scroll gesture fires many wheel events in quick succession —
-// each one passes through an intermediate zoom level on the way to wherever
-// scrolling stops. Updating zoomLevel and redrawing on every event keeps the
-// view responsive (drawTilesAtZoom's placeholder fallback shows something
-// immediately), but actually requesting tiles on every single event would
-// queue a full fetch+render batch for every zoom level passed through, not
-// just the one the user lands on — leaving the real target zoom's tiles
-// stuck behind several already-irrelevant batches for seconds. Debouncing
-// the request to fire once scrolling has paused avoids that entirely.
+// Zooming is via the +/- buttons (zoomIn()/zoomOut()) only — scroll-wheel and
+// trackpad pinch are intentionally disabled (a fast pinch gesture firing many
+// wheel events was the source of the zoom-jump browser crash; buttons mean
+// zoomLevel only ever changes one step at a time, deliberately). Still
+// returning false here, so the browser doesn't fall back to scrolling the
+// page or its own native pinch-to-zoom on the now-unhandled gesture.
 function mouseWheel(event) {
-  const cursorTileX = centerX + (mouseX - width / 2) / TILE_SIZE;
-  const cursorTileY = centerY + (mouseY - height / 2) / TILE_SIZE;
-  const lon = tileXToLon(cursorTileX, zoomLevel);
-  const lat = tileYToLat(cursorTileY, zoomLevel);
+  return false;
+}
 
-  zoomLevel = constrain(zoomLevel + (event.deltaY > 0 ? -1 : 1), MIN_ZOOM, MAX_ZOOM);
-
-  const newCursorTileX = lonToTileX(lon, zoomLevel);
-  const newCursorTileY = latToTileY(lat, zoomLevel);
-  centerX = newCursorTileX - (mouseX - width / 2) / TILE_SIZE;
-  centerY = newCursorTileY - (mouseY - height / 2) / TILE_SIZE;
+// Zooms on the view centre — there's no cursor position to anchor to when
+// the zoom came from a button click rather than a pointer gesture. Same
+// debounced-request pattern as the old wheel handler: redraw immediately for
+// responsiveness, but delay the actual tile fetch slightly in case of rapid
+// repeated clicks.
+function zoomBy(delta) {
+  const lon = tileXToLon(centerX, zoomLevel);
+  const lat = tileYToLat(centerY, zoomLevel);
+  zoomLevel = constrain(zoomLevel + delta, MIN_ZOOM, MAX_ZOOM);
+  centerX = lonToTileX(lon, zoomLevel);
+  centerY = latToTileY(lat, zoomLevel);
   redraw();
 
   clearTimeout(zoomRequestTimer);
   zoomRequestTimer = setTimeout(requestMissingTiles, 150);
-  return false; // prevent page scroll
+}
+
+function zoomIn() {
+  zoomBy(1);
+}
+
+function zoomOut() {
+  zoomBy(-1);
 }
 
 function windowResized() {
@@ -365,7 +384,8 @@ function windowResized() {
 function updateInfo() {
   const info = document.getElementById('info');
   if (!info) return;
-  info.textContent = `${tileYToLat(centerY, zoomLevel).toFixed(4)}°, ${tileXToLon(centerX, zoomLevel).toFixed(4)}° — z${zoomLevel}`;
+  const datasetLabel = activeDataset === 'cloud' ? 'random visibility cloud' : 'log.csv';
+  info.textContent = `${tileYToLat(centerY, zoomLevel).toFixed(4)}°, ${tileXToLon(centerX, zoomLevel).toFixed(4)}° — z${zoomLevel} — [D] ${datasetLabel} (${points.length} pts)`;
 }
 
 // Merges every tile drawn last frame into a single flat SVG: takes each
