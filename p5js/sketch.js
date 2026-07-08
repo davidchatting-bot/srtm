@@ -123,7 +123,7 @@ function requestMissingTiles() {
 
       tileCache[key] = { pixels: null, status: 'loading' };
       loadImage(
-        `/tiles/${DATA_ZOOM}/${wtx}/${ty}.png`,
+        `/tiles/${DATA_ZOOM}/${wtx}/${ty}.png?raw=true`, // exact 16-bit elevation, not the default greyscale
         img => {
           img.loadPixels();
           tileCache[key] = { pixels: new Uint8Array(img.pixels), status: 'loaded' };

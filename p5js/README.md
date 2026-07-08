@@ -13,7 +13,7 @@ A browser-based isometric bar-chart viewer for the SRTM tile server. Served auto
 ## How it works
 
 1. **`preload()`** fetches `/info` from the server to get the native SRTM sample spacing (`files[0].pixelDeg` — assumes a single resolution across all loaded tiles); **`setup()`** then uses it to compute `GRID_W × GRID_H` (so each bar in the chart maps to exactly one SRTM data point) and the `DATA_ZOOM` tile-request level.
-2. **`ensureTilesLoaded()`** requests elevation tiles (`/tiles/z/x/y.png`) for all slippy-map tiles in the current view. Pixel data is extracted once on load via `img.loadPixels()` and cached as a `Uint8Array`.
+2. **`ensureTilesLoaded()`** requests elevation tiles (`/tiles/z/x/y.png?raw=true` — the exact 16-bit encoding, not the server's default greyscale) for all slippy-map tiles in the current view. Pixel data is extracted once on load via `img.loadPixels()` and cached as a `Uint8Array`.
 3. **`draw()`** samples the cached tile pixels at each grid cell, decodes the 16-bit R/G-encoded value back to metres (`v16 = (R << 8) | G`, then `(v16 / 65535) × 9000 − 500`), then renders the scene in four layers (back to front):
    - **Soil layer** — opaque brown diamond, offset `maxBarH × 2.875` below ground.
    - **Sea layer** — opaque blue diamond at ground level (0 m). Cells at or below sea level are skipped in the bar loop; this layer covers them.

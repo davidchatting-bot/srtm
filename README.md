@@ -65,12 +65,12 @@ Each entry in `files` is one loaded `.hgt` tile: `pixelDeg` is its native sample
 
 ### PNG
 
-Both endpoints below return elevation encoded the same way: 16-bit precision packed across the R and G channels (`R << 8 | G`) over a fixed range of −500 m to 8500 m — this is not a greyscale image, R and G individually look like arbitrary noise. Decode with `(v16 / 65535) * 9000 − 500`. Areas with no data are transparent. Because the encoding and range are identical, a `/terrain` image and a `/tiles` mosaic of the same area are pixel-for-pixel interchangeable.
+Both endpoints below render elevation the same way, over a fixed range of −500 m to 8500 m so areas/tiles stay consistent with each other. By default that's a plain single-channel greyscale byte (R=G=B) — a pleasant image to look at directly, at 8-bit precision. Pass `raw=true` for 16-bit precision instead, packed across the R and G channels (`R << 8 | G`, decode with `(v16 / 65535) * 9000 − 500`) — this is not a greyscale image in that mode, R and G individually look like arbitrary noise; it's for consumers that reconstruct exact elevation (e.g. the isometric viewer). Areas with no data are transparent in both modes. Because the encoding and range are identical between the two endpoints, a `/terrain` image and a `/tiles` mosaic of the same area are pixel-for-pixel interchangeable (in the same mode).
 
 #### Slippy map tiles
 
 ```
-GET /tiles/:z/:x/:y.png
+GET /tiles/:z/:x/:y.png?raw=<bool>
 ```
 
 Standard XYZ tiles compatible with Leaflet, OpenLayers, Mapbox GL, etc.:
@@ -82,7 +82,7 @@ L.tileLayer('http://localhost:3000/tiles/{z}/{x}/{y}.png').addTo(map);
 #### Bounding-box terrain image
 
 ```
-GET /terrain?lon=<longitude>&lat=<latitude>&radius=<km>&resolution=<n>
+GET /terrain?lon=<longitude>&lat=<latitude>&radius=<km>&resolution=<n>&raw=<bool>
 ```
 
 | Parameter | Required | Default | Description |
@@ -91,12 +91,13 @@ GET /terrain?lon=<longitude>&lat=<latitude>&radius=<km>&resolution=<n>
 | `lat` | yes | — | Latitude in decimal degrees |
 | `radius` | yes | — | Radius in kilometres |
 | `resolution` | no | full SRTM resolution | Output size (NxN), 8–2000. Omit for an exact per-pixel native-resolution image (not necessarily square); if given, bilinearly resamples to a square grid instead |
+| `raw` | no | false | 16-bit R/G data encoding instead of the default greyscale — see above |
 
 Returns a PNG centred on the given point.
 
 ### SVG
 
-Both endpoints below render contour lines the same way: marching squares over a bilinearly-interpolated, resampled elevation grid, with each contour chained into a single path and rendered as a quadratic-Bezier smoothed curve rather than raw straight segments, to avoid a blocky/faceted look. Each line is a 1px stroke shaded a level of grey mapped from its elevation over the fixed −500 m to 8500 m range onto grey 0–255 — the same range as the [PNG](#png) endpoints above.
+Both endpoints below render contour lines the same way: marching squares over a bilinearly-interpolated, resampled elevation grid, with each contour chained into a single path and rendered as a quadratic-Bezier smoothed curve rather than raw straight segments, to avoid a blocky/faceted look. Every line is a plain 1px black stroke, regardless of elevation.
 
 #### Contour map
 
@@ -140,7 +141,7 @@ The zoom-keyed interval default mirrors real OS leisure-map intervals, anchored 
 
 OS Explorer doubles its interval to 10m in mountainous regions, but that's decided per published map sheet (a fixed boundary), not computed live — doing it per-tile from local relief would make neighbouring tiles disagree right where one straddles the steep/flat line, breaking the cross-tile stitching above. Pass `?interval=10` explicitly for mountainous areas instead of relying on auto-detection.
 
-Standard XYZ contour tiles, greyscale-encoded the same way as `/contours.svg`, with a transparent background — usable as a slippy-map overlay:
+Standard XYZ contour tiles, black lines on a transparent background — usable as a slippy-map overlay:
 
 ```js
 L.tileLayer('http://localhost:3000/contour-tiles/{z}/{x}/{y}.svg').addTo(map);
@@ -168,7 +169,7 @@ The raw-data counterpart to `/terrain`: instead of a rendered image, returns a J
 ### Terrain profile
 
 ```
-GET /line.svg?lon1=<longitude>&lat1=<latitude>&lon2=<longitude>&lat2=<latitude>&curved=<bool>&samples=<n>&width=<px>&height=<px>&heightScale=<n>
+GET /line.svg?lon1=<longitude>&lat1=<latitude>&lon2=<longitude>&lat2=<latitude>&curved=<bool>&samplesPerKm=<n>&width=<px>&heightScale=<n>
 ```
 
 | Parameter | Required | Default | Description |
@@ -176,13 +177,13 @@ GET /line.svg?lon1=<longitude>&lat1=<latitude>&lon2=<longitude>&lat2=<latitude>&
 | `lon1` / `lat1` | yes | — | Start point (drawn on the left) |
 | `lon2` / `lat2` | yes | — | End point (drawn on the right) |
 | `curved` | no | true | Whether to add Earth's curvature (see below) or plot a flat cross-section ignoring it |
-| `samples` | no | 200 | Number of elevation samples along the path, 8–2000 |
-| `width` / `height` | no | 800 / 200 | Output SVG dimensions in pixels, 100–2000 / 50–5000 |
+| `samplesPerKm` | no | 10 | Elevation samples per kilometre of path, 0.01–50 — a rate rather than a flat total, so resolution doesn't depend on any one path's length (same reasoning as `/visibility`'s `stepsPerKm`). The resulting total sample count is still capped to 8–2000 |
+| `width` | no | 800 | Output SVG width in pixels, 100–2000 |
 | `heightScale` | no | 1 | Terrain-relief exaggeration factor, 0.001–100000 (see below) |
 
-Returns an SVG line chart of elevation along the great-circle path from the start point to the end point, drawn true to scale by default: one metres-per-pixel factor, derived from `width` and the distance between the points, applies to the horizontal axis and to sea level's curved position — the geometric fact of where the curve puts sea level isn't something the chart distorts. Real terrain relief is drawn above that sea-level baseline at the same true scale by default too, unless `heightScale` says otherwise. Sea level sits at the bottom edge when `curved` is off; anything that rises higher than `height` at its respective scale is clipped by the canvas rather than the chart rescaling itself to fit, so pick a taller `height` to see subtle relief or long-distance curvature. Missing data along the path (e.g. no `.hgt` tile loaded for that section) is treated as sea level rather than leaving a gap.
+Returns an SVG line chart of elevation along the great-circle path from the start point to the end point, drawn true to scale by default: one metres-per-pixel factor, derived from `width` and the distance between the points, applies to the horizontal axis and to sea level's curved position — the geometric fact of where the curve puts sea level isn't something the chart distorts. Real terrain relief is drawn above that sea-level baseline at the same true scale by default too, unless `heightScale` says otherwise. There's no `height` parameter: the artboard's height and vertical `viewBox` are derived from the resulting line itself, cropped tightly around it (with a sliver of padding for the stroke width) rather than placed somewhere inside a fixed canvas. Missing data along the path (e.g. no `.hgt` tile loaded for that section) is treated as sea level rather than leaving a gap.
 
-`heightScale` exaggerates real terrain relief only — it never touches the horizontal (distance) scale, nor sea level's curved position, only how many pixels a metre of *elevation above sea level* maps to, e.g. `heightScale=100` draws every metre of relief 100x taller than true scale while the curvature stays geometrically accurate. This is useful for making subtle terrain visible without needing an enormous `height` to match the true horizontal scale, and without exaggerating (and so misrepresenting) the curvature itself — just remember to raise `height` too if the exaggerated relief would otherwise be clipped.
+`heightScale` exaggerates real terrain relief only — it never touches the horizontal (distance) scale, nor sea level's curved position, only how many pixels a metre of *elevation above sea level* maps to, e.g. `heightScale=100` draws every metre of relief 100x taller than true scale while the curvature stays geometrically accurate. This is useful for making subtle terrain visible without the tiny proportions true scale would otherwise give it, and without exaggerating (and so misrepresenting) the curvature itself; since the artboard auto-crops to fit, there's no need to separately raise a canvas size to match.
 
 When `curved` is enabled, each sample has the exact sagitta added — the height an arc rises above its chord, zero at both endpoints and maximum at the midpoint. A chord between two points on a sphere lies inside it, so the true surface between them actually rises above a straight line drawn between them by this amount (the same effect that limits radio/visual line-of-sight over distance); `curved=false` plots the raw elevations instead, ignoring Earth's shape entirely.
 

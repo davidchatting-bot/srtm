@@ -237,14 +237,31 @@ function intervalForZoom(z) {
   return 1; // ~1:5,000 and closer — survey/LIDAR-grade resolution territory
 }
 
-// Elevation → greyscale, over the fixed -500m..8500m range (same range the
-// /tiles encoding uses) so a given elevation renders the same grey regardless
-// of any one tile's local min/max — needed for contours to read consistently
-// as you pan/zoom across tiles.
-function greyForElevation(elev) {
-  const t = Math.max(0, Math.min(1, (elev - ELEV_MIN) / ELEV_RANGE));
-  const g = Math.round(t * 255);
-  return `rgb(${g},${g},${g})`;
+// Writes one elevation sample into a PNG's RGBA buffer at byte offset `idx`.
+// Both encodings use the same fixed -500m..8500m range as everywhere else in
+// this file, so tiles/images stay visually/decodably consistent with each
+// other regardless of any one area's local min/max.
+//
+// raw=true: 16-bit precision split across the R and G channels
+// (`R << 8 | G`) — decode with `(v16 / 65535) * 9000 - 500`. Needed by
+// consumers that reconstruct exact elevation, e.g. the isometric viewer.
+// raw=false (default): a single-channel greyscale byte — a plain, pleasant
+// image to look at directly, at the cost of only 8-bit precision.
+function writeElevationPixel(data, idx, val, raw) {
+  if (isNaN(val)) {
+    data[idx + 3] = 0;
+    return;
+  }
+  if (raw) {
+    const v16 = Math.max(0, Math.min(65535, Math.round(((val - ELEV_MIN) / ELEV_RANGE) * 65535)));
+    data[idx]     = (v16 >> 8) & 0xff;
+    data[idx + 1] = v16 & 0xff;
+    data[idx + 2] = 0;
+  } else {
+    const g = Math.max(0, Math.min(255, Math.round(((val - ELEV_MIN) / ELEV_RANGE) * 255)));
+    data[idx] = g; data[idx + 1] = g; data[idx + 2] = g;
+  }
+  data[idx + 3] = 255;
 }
 
 // Marching squares: returns line segments (in grid cell units) where `grid` crosses `level`.
@@ -542,18 +559,15 @@ app.get("/contours.svg", (req, res) => {
     for (let level = Math.ceil(min / interval) * interval; level < max; level += interval) {
       const segments = marchingSquares(grid, samples, samples, level);
       if (segments.length === 0) continue;
-      const grey = greyForElevation(level);
-      body += `<g stroke="${grey}" stroke-width="1" fill="none" stroke-linecap="round" stroke-linejoin="round">`;
       for (const chain of chainSegments(segments)) {
         const d = smoothPathD(chain.points, chain.closed, scale);
         if (d) body += `<path d="${d}"/>`;
       }
-      body += `</g>`;
     }
 
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">` +
       `<rect width="100%" height="100%" fill="#808080"/>` +
-      body +
+      `<g stroke="#000" stroke-width="1" fill="none" stroke-linecap="round" stroke-linejoin="round">${body}</g>` +
       `</svg>`;
 
     writeCache(cacheFile, svg);
@@ -635,16 +649,13 @@ app.get("/contour-tiles/:z/:x/:y.svg", (req, res) => {
     for (let level = Math.ceil(min / interval) * interval; level <= max; level += interval) {
       const segments = marchingSquares(grid, samples, samples, level);
       if (segments.length === 0) continue;
-      const grey = greyForElevation(level);
-      body += `<g stroke="${grey}" stroke-width="1" fill="none" stroke-linecap="round" stroke-linejoin="round">`;
       for (const chain of chainSegments(segments)) {
         const d = smoothPathD(chain.points, chain.closed, scale);
         if (d) body += `<path d="${d}"/>`;
       }
-      body += `</g>`;
     }
 
-    sendAndCache(`${svgOpen}${body}</svg>`);
+    sendAndCache(`${svgOpen}<g stroke="#000" stroke-width="1" fill="none" stroke-linecap="round" stroke-linejoin="round">${body}</g></svg>`);
   } catch (err) {
     console.error(err);
     res.status(500).send("Server error");
@@ -657,6 +668,8 @@ app.get("/tiles/:z/:x/:y.png", (req, res) => {
     const x = parseInt(req.params.x);
     const y = parseInt(req.params.y);
     if (isNaN(z) || isNaN(x) || isNaN(y)) return res.status(400).send("Invalid tile coordinates");
+
+    const raw = req.query.raw === "true" || req.query.raw === "1";
 
     const { minLon, maxLon, minLat, maxLat } = tileBounds(x, y, z);
     const cache = loadSRTMCache(minLon, minLat, maxLon, maxLat);
@@ -673,15 +686,7 @@ app.get("/tiles/:z/:x/:y.png", (req, res) => {
         const { lon, lat } = pixelToLonLat(px + 0.5, py + 0.5, x, y, z);
         const val = sampleCache(cache, lon, lat);
         const idx = (py * TILE_SIZE + px) * 4;
-        if (isNaN(val)) {
-          png.data[idx + 3] = 0;
-        } else {
-          const v16 = Math.max(0, Math.min(65535, Math.round(((val - ELEV_MIN) / ELEV_RANGE) * 65535)));
-          png.data[idx]     = (v16 >> 8) & 0xff;  // high byte → R
-          png.data[idx + 1] = v16 & 0xff;          // low byte  → G
-          png.data[idx + 2] = 0;
-          png.data[idx + 3] = 255;
-        }
+        writeElevationPixel(png.data, idx, val, raw);
       }
     }
 
@@ -703,6 +708,7 @@ app.get("/terrain", (req, res) => {
     const resolution = req.query.resolution !== undefined
       ? Math.min(2000, Math.max(8, parseInt(req.query.resolution)))
       : null;
+    const raw = req.query.raw === "true" || req.query.raw === "1";
 
     const { latOffset, lonOffset } = kmToDegreeOffsets(lat, radiusKm);
     const minLon = lon - lonOffset;
@@ -788,21 +794,11 @@ app.get("/terrain", (req, res) => {
       if (!outputRaster.some(v => !isNaN(v))) return res.status(404).send("No elevation data available for this area");
     }
 
-    // Same fixed-range 16-bit R/G encoding as /tiles, so a /terrain image and
-    // a /tiles mosaic of the same area are pixel-for-pixel interchangeable.
+    // Same fixed-range encoding as /tiles (raw or greyscale), so a /terrain
+    // image and a /tiles mosaic of the same area agree with each other.
     const png = new PNG({ width: outWidth, height: outHeight });
     for (let i = 0; i < outputRaster.length; i++) {
-      const val = outputRaster[i];
-      const idx = i * 4;
-      if (isNaN(val)) {
-        png.data[idx + 3] = 0;
-      } else {
-        const v16 = Math.max(0, Math.min(65535, Math.round(((val - ELEV_MIN) / ELEV_RANGE) * 65535)));
-        png.data[idx]     = (v16 >> 8) & 0xff;
-        png.data[idx + 1] = v16 & 0xff;
-        png.data[idx + 2] = 0;
-        png.data[idx + 3] = 255;
-      }
+      writeElevationPixel(png.data, i * 4, outputRaster[i], raw);
     }
 
     res.setHeader("Content-Type", "image/png");
@@ -1102,13 +1098,18 @@ app.get("/line.svg", (req, res) => {
     if ([lon1, lat1, lon2, lat2].some(isNaN)) return res.status(400).send("Invalid lon1/lat1/lon2/lat2");
 
     const curved = req.query.curved !== "false" && req.query.curved !== "0";
-    const samples = Math.min(2000, Math.max(8, parseInt(req.query.samples) || 200));
     const width = Math.min(2000, Math.max(100, parseInt(req.query.width) || 800));
-    const height = Math.min(5000, Math.max(50, parseInt(req.query.height) || 200));
     const heightScale = Math.min(100000, Math.max(0.001, parseFloat(req.query.heightScale) || 1));
+    // Samples per km, not a flat total, so resolution stays independent of
+    // any one path's length — a 20km and a 2000km path both get sampled at
+    // the same density, rather than a fixed total sample count getting
+    // diluted over longer paths (the same reasoning as /visibility's
+    // stepsPerKm, for the same reason: paths here are arbitrary lengths).
+    const samplesPerKm = Math.min(50, Math.max(0.01, parseFloat(req.query.samplesPerKm) || 10));
 
     const totalKm = haversineDistanceKm(lon1, lat1, lon2, lat2);
     const bearing = initialBearing(lon1, lat1, lon2, lat2);
+    const samples = Math.max(8, Math.min(2000, Math.round(totalKm * samplesPerKm) || 200));
 
     const marginDeg = 0.02;
     const cache = loadSRTMCache(
@@ -1122,27 +1123,38 @@ app.get("/line.svg", (req, res) => {
     // sea level isn't something heightScale should be allowed to distort.
     // heightScale only stretches how tall real terrain relief is drawn above
     // that sea-level baseline, e.g. to make subtle hills visible without
-    // exaggerating the curvature itself. Sea level sits at the bottom edge
-    // when curved is off; anything that rises higher than `height` at its
-    // respective scale is simply clipped by the viewBox rather than the
-    // chart rescaling itself to fit — pass a taller height to see more of
-    // it. Missing data (e.g. no .hgt tile loaded for part of the path) falls
-    // back to sea level rather than leaving a gap in the profile.
+    // exaggerating the curvature itself. Missing data (e.g. no .hgt tile
+    // loaded for part of the path) falls back to sea level rather than
+    // leaving a gap in the profile.
     const scale = width / (totalKm * 1000 || 1); // px per metre, horizontal
     const yScale = scale * heightScale; // px per metre, vertical — terrain relief only
 
-    const points = new Array(samples);
+    // y here means "higher is bigger" (the opposite of SVG's own coordinate
+    // system, where higher is smaller) — flipped once below, after the full
+    // range is known, so the artboard can be cropped tightly around the
+    // resulting line instead of placed somewhere inside a fixed canvas.
+    const rawPoints = new Array(samples);
+    let minY = Infinity, maxY = -Infinity;
     for (let i = 0; i < samples; i++) {
       const d = (i / (samples - 1)) * totalKm;
       const { lon, lat } = destinationPoint(lon1, lat1, bearing, d);
       const elev = elevationOrSeaLevel(cache, lon, lat);
       const seaLevelPx = curved ? chordSagittaM(d, totalKm) * scale : 0; // always true to scale
-      const y = height - seaLevelPx - elev * yScale;
-      points[i] = `${(d * 1000 * scale).toFixed(1)},${y.toFixed(1)}`;
+      const y = seaLevelPx + elev * yScale;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+      rawPoints[i] = { x: d * 1000 * scale, y };
     }
 
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">` +
-      `<polyline points="${points.join(" ")}" fill="none" stroke="#000" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>` +
+    const strokeWidth = 1.5;
+    const pad = strokeWidth / 2; // so the stroke itself isn't clipped at the crop edge
+    const viewMinY = -maxY - pad;
+    const viewHeight = (maxY - minY) + strokeWidth;
+
+    const points = rawPoints.map(p => `${p.x.toFixed(1)},${(-p.y).toFixed(1)}`).join(" ");
+
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${viewHeight.toFixed(1)}" viewBox="0 ${viewMinY.toFixed(1)} ${width} ${viewHeight.toFixed(1)}">` +
+      `<polyline points="${points}" fill="none" stroke="#000" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round"/>` +
       `</svg>`;
 
     res.setHeader("Content-Type", "image/svg+xml");
