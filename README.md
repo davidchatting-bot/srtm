@@ -71,9 +71,7 @@ Standard XYZ tiles compatible with Leaflet, OpenLayers, Mapbox GL, etc.:
 L.tileLayer('http://localhost:3000/tiles/{z}/{x}/{y}.png').addTo(map);
 ```
 
-Elevation is encoded as grayscale over a fixed range (−500 m to 8500 m) so neighbouring tiles are visually consistent. Areas with no data are transparent.
-
-Tiles use 16-bit precision encoded across the R and G channels (`R << 8 | G`) over that same −500 m to 8500 m range. The viewer decodes this as `(v16 / 65535) * 9000 − 500`.
+Elevation is encoded at 16-bit precision across the R and G channels (`R << 8 | G`) over a fixed range of −500 m to 8500 m, so neighbouring tiles are visually consistent — this is not a grayscale image, R and G individually look like arbitrary noise. The viewer decodes this as `(v16 / 65535) * 9000 − 500`. Areas with no data are transparent.
 
 ### Bounding-box terrain image
 
