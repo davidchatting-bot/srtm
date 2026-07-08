@@ -4,6 +4,21 @@ A Node.js/Express service that serves SRTM terrain elevation data as slippy map 
 
 ## Setup
 
+### 1. Clone the repo
+
+```bash
+git clone https://github.com/davidchatting/srtm.git
+cd srtm
+```
+
+### 2. Install dependencies
+
+```bash
+npm install
+```
+
+### 3. Add SRTM elevation data
+
 This repo does not include or distribute any SRTM data — you need to supply your own `.hgt` tiles.
 
 This service uses **NASA Shuttle Radar Topography Mission Global 1 arc second V003** data. A free NASA Earthdata account is required to download files.
@@ -12,16 +27,15 @@ This service uses **NASA Shuttle Radar Topography Mission Global 1 arc second V0
 
 Files should follow the standard naming convention (e.g. `N51W001.hgt`) and be placed in a `data/` directory at the project root. Only tiles covering the area(s) you want to view/query are needed — the server just skips locations it has no matching tile for (see `/info` below to check what's currently loaded).
 
-### Data license
+#### Data license
 
 The SRTM dataset is freely available under the [EOSDIS Data Use Policy](https://www.earthdata.nasa.gov/engage/open-data-services-and-software/data-use-policy). Use requires the following citation:
 
 > NASA JPL (2013). *NASA Shuttle Radar Topography Mission Global 1 arc second* [Data set]. NASA Land Processes Distributed Active Archive Center. https://doi.org/10.5067/MEASURES/SRTM/SRTMGL1.003
 
-Once you have tiles in place:
+### 4. Run
 
 ```bash
-npm install
 node script.js
 ```
 
