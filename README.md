@@ -2,13 +2,15 @@
 
 A Node.js/Express service that serves SRTM terrain elevation data as slippy map tiles, plus a p5.js isometric viewer that renders the terrain as a 3-D bar chart.
 
-## Data
+## Setup
+
+This repo does not include or distribute any SRTM data — you need to supply your own `.hgt` tiles.
 
 This service uses **NASA Shuttle Radar Topography Mission Global 1 arc second V003** data. A free NASA Earthdata account is required to download files.
 
 - Dataset: https://doi.org/10.5067/MEASURES/SRTM/SRTMGL1.003
 
-Files should follow the standard naming convention (e.g. `N51W001.hgt`).
+Files should follow the standard naming convention (e.g. `N51W001.hgt`) and be placed in a `data/` directory at the project root. Only tiles covering the area(s) you want to view/query are needed — the server just skips locations it has no matching tile for (see `/info` below to check what's currently loaded).
 
 ### Data license
 
@@ -16,9 +18,7 @@ The SRTM dataset is freely available under the [EOSDIS Data Use Policy](https://
 
 > NASA JPL (2013). *NASA Shuttle Radar Topography Mission Global 1 arc second* [Data set]. NASA Land Processes Distributed Active Archive Center. https://doi.org/10.5067/MEASURES/SRTM/SRTMGL1.003
 
-## Setup
-
-Place SRTM `.hgt` files in a `data/` directory at the project root, then:
+Once you have tiles in place:
 
 ```bash
 npm install
@@ -39,9 +39,9 @@ sudo systemctl enable --now srtm
 
 ## Viewer
 
-Open `http://localhost:3000` in a browser to see an isometric bar-chart of the terrain centred on San Francisco. Each bar represents one SRTM sample (~90 m for SRTM3, ~30 m for SRTM1). Bar height is proportional to elevation above sea level; colour is fixed: blue at sea level, green above. Drag to pan.
+Open `http://localhost:3000` in a browser to see an isometric bar-chart of the terrain. It defaults to `LON_DEFAULT`/`LAT_DEFAULT` in `p5js/sketch.js` — currently 55°N, 1.6°W — but shows nothing until you've placed the matching `.hgt` tile(s) for that location (or your chosen one) in `data/`. Each bar represents one SRTM sample (~90 m for SRTM3, ~30 m for SRTM1). Bar height is proportional to elevation above sea level; colour is fixed: blue at sea level, green above. Drag to pan.
 
-To change location or view radius edit the constants at the top of `p5js/sketch.js`.
+To change location or view radius edit `LON_DEFAULT`/`LAT_DEFAULT`/`RADIUS_KM` at the top of `p5js/sketch.js`, or pass `?lat=<lat>&lon=<lon>` in the URL.
 
 ## Endpoints
 
