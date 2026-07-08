@@ -47,23 +47,11 @@ sudo systemctl enable --now srtm
 
 ## Endpoints
 
-### Data info
+### PNG
 
-```
-GET /info
-```
+Both endpoints below return elevation encoded the same way: 16-bit precision packed across the R and G channels (`R << 8 | G`) over a fixed range of −500 m to 8500 m — this is not a greyscale image, R and G individually look like arbitrary noise. Decode with `(v16 / 65535) * 9000 − 500`. Areas with no data are transparent. Because the encoding and range are identical, a `/terrain` image and a `/tiles` mosaic of the same area are pixel-for-pixel interchangeable.
 
-Returns JSON describing each loaded SRTM tile:
-
-```json
-{ "files": [
-  { "name": "N37W123.hgt", "pixelDeg": 0.000833, "region": { "minLon": -123, "maxLon": -122, "minLat": 37, "maxLat": 38 } }
-] }
-```
-
-Each entry in `files` is one loaded `.hgt` tile: `pixelDeg` is its native sample spacing in degrees (1/1200 for SRTM3, 1/3600 for SRTM1), and `region` is the 1°×1° bounding box (decimal degrees) it covers, parsed from its filename. Both are per-file rather than assumed uniform, since a `data/` directory could in principle mix SRTM1 and SRTM3 tiles.
-
-### Slippy map tiles
+#### Slippy map tiles
 
 ```
 GET /tiles/:z/:x/:y.png
@@ -75,9 +63,7 @@ Standard XYZ tiles compatible with Leaflet, OpenLayers, Mapbox GL, etc.:
 L.tileLayer('http://localhost:3000/tiles/{z}/{x}/{y}.png').addTo(map);
 ```
 
-Elevation is encoded at 16-bit precision across the R and G channels (`R << 8 | G`) over a fixed range of −500 m to 8500 m, so neighbouring tiles are visually consistent — this is not a greyscale image, R and G individually look like arbitrary noise. Decode with `(v16 / 65535) * 9000 − 500`. Areas with no data are transparent.
-
-### Bounding-box terrain image
+#### Bounding-box terrain image
 
 ```
 GET /terrain?lon=<longitude>&lat=<latitude>&radius=<km>
@@ -89,28 +75,13 @@ GET /terrain?lon=<longitude>&lat=<latitude>&radius=<km>
 | `lat` | yes | — | Latitude in decimal degrees |
 | `radius` | no | 5 | Radius in kilometres |
 
-Returns a PNG at full SRTM resolution centred on the given point, using the same fixed-range 16-bit R/G encoding as `/tiles` (`R << 8 | G` over −500 m to 8500 m — decode with `(v16 / 65535) * 9000 − 500`), so a `/terrain` image and a `/tiles` mosaic of the same area are pixel-for-pixel interchangeable. Areas with no data are transparent.
+Returns a PNG at full SRTM resolution centred on the given point.
 
-### Bounding-box terrain data (JSON)
+### SVG
 
-```
-GET /heightmap?lon=<longitude>&lat=<latitude>&radius=<km>&samples=<n>
-```
+Both endpoints below render contour lines the same way: marching squares over a bilinearly-interpolated, resampled elevation grid, with each contour chained into a single path and rendered as a quadratic-Bezier smoothed curve rather than raw straight segments, to avoid a blocky/faceted look. Each line is shaded a level of grey mapped from its elevation via `greyMin`/`greyMax` (default −500 / 8500, spanning sea-level to Everest) onto grey 0–255 — narrow this to the area's actual elevation range (e.g. `greyMin=0&greyMax=150`) for visible contrast, since the default range crushes modest local relief (most of the UK, ~0–200m) into a sliver of near-black grey.
 
-| Parameter | Required | Default | Description |
-|-----------|----------|---------|-------------|
-| `lon` | yes | — | Longitude in decimal degrees |
-| `lat` | yes | — | Latitude in decimal degrees |
-| `radius` | no | 1 | Radius in kilometres |
-| `samples` | no | 64 | Sampling grid size (NxN), 2–256 |
-
-The raw-data counterpart to `/terrain`: instead of a rendered image, returns a JSON grid of bilinearly-interpolated elevation values in metres, row-major from the north-west corner:
-
-```json
-{ "samples": 64, "data": [123.4, 125.1, ...] }
-```
-
-### Contour map (SVG)
+#### Contour map
 
 ```
 GET /contours.svg?lon=<longitude>&lat=<latitude>&radius=<km>&resolution=<n>&interval=<m>&size=<px>&strokeWidth=<px>&greyMin=<m>&greyMax=<m>
@@ -125,11 +96,11 @@ GET /contours.svg?lon=<longitude>&lat=<latitude>&radius=<km>&resolution=<n>&inte
 | `interval` | no | auto | Contour interval in metres; auto picks a "nice" interval for ~12 levels across the local elevation range |
 | `size` | no | 800 | Output SVG width/height in pixels |
 | `strokeWidth` | no | 1 | Contour line stroke width in pixels |
-| `greyMin` / `greyMax` | no | -500 / 8500 | Elevation range (metres) mapped to grey 0–255. The default spans sea-level to Everest so a given elevation is the same grey everywhere, but that means modest local relief (most of the UK, ~0–200m) only occupies a sliver of it and every line looks almost the same near-black grey. Narrow this to the area's actual elevation range (e.g. `greyMin=0&greyMax=150`) for visible contrast |
+| `greyMin` / `greyMax` | no | -500 / 8500 | Elevation range (metres) mapped to grey 0–255 — see above |
 
-Returns an SVG image with one contour line per elevation level, computed via marching squares over a resampled elevation grid. Each contour line is shaded a level of grey proportional to its elevation. Elevation samples are bilinearly interpolated, and each contour is chained into a single path and rendered as a quadratic-Bezier smoothed curve rather than raw straight segments, to avoid a blocky/faceted look.
+Returns an SVG image with one contour line per elevation level.
 
-### Contour slippy tiles (SVG)
+#### Contour slippy tiles
 
 ```
 GET /contour-tiles/:z/:x/:y.svg?resolution=<n>&interval=<m>&strokeWidth=<px>&greyMin=<m>&greyMax=<m>
@@ -140,7 +111,7 @@ GET /contour-tiles/:z/:x/:y.svg?resolution=<n>&interval=<m>&strokeWidth=<px>&gre
 | `resolution` | no | 128 | Sampling grid size per tile (NxN), 8–256 |
 | `interval` | no | by zoom | Contour interval in metres. Default is keyed by zoom level only, so every tile at a given zoom uses the same levels and lines connect across tile edges — a per-tile auto interval based on local relief would pick different levels per tile and the lines wouldn't line up |
 | `strokeWidth` | no | 1 | Contour line stroke width in pixels |
-| `greyMin` / `greyMax` | no | -500 / 8500 | Same elevation→grey range as `/contours.svg` above. Narrowing it to the area's relief is what makes contour lines visually distinguishable instead of all rendering as nearly the same dark grey — as long as the same range is requested for every tile in a session, neighbouring tiles still agree on which grey a given elevation gets |
+| `greyMin` / `greyMax` | no | -500 / 8500 | Same elevation→grey range as above — must match across every tile in a session for neighbouring tiles to agree on which grey a given elevation gets |
 
 The zoom-keyed interval default mirrors real OS leisure-map intervals, anchored at the zoom level the equivalent published scale converts to (`metresPerPixel = 156543 * cos(lat) / 2^z`, equator-approximate):
 
@@ -162,7 +133,44 @@ Standard XYZ contour tiles, greyscale-encoded the same way as `/contours.svg`, w
 L.tileLayer('http://localhost:3000/contour-tiles/{z}/{x}/{y}.svg').addTo(map);
 ```
 
-### Viewshed (line-of-sight horizon)
+### JSON
+
+#### Data info
+
+```
+GET /info
+```
+
+Returns JSON describing each loaded SRTM tile:
+
+```json
+{ "files": [
+  { "name": "N37W123.hgt", "pixelDeg": 0.000833, "region": { "minLon": -123, "maxLon": -122, "minLat": 37, "maxLat": 38 } }
+] }
+```
+
+Each entry in `files` is one loaded `.hgt` tile: `pixelDeg` is its native sample spacing in degrees (1/1200 for SRTM3, 1/3600 for SRTM1), and `region` is the 1°×1° bounding box (decimal degrees) it covers, parsed from its filename. Both are per-file rather than assumed uniform, since a `data/` directory could in principle mix SRTM1 and SRTM3 tiles.
+
+#### Bounding-box terrain data
+
+```
+GET /heightmap?lon=<longitude>&lat=<latitude>&radius=<km>&samples=<n>
+```
+
+| Parameter | Required | Default | Description |
+|-----------|----------|---------|-------------|
+| `lon` | yes | — | Longitude in decimal degrees |
+| `lat` | yes | — | Latitude in decimal degrees |
+| `radius` | no | 1 | Radius in kilometres |
+| `samples` | no | 64 | Sampling grid size (NxN), 2–256 |
+
+The raw-data counterpart to `/terrain`: instead of a rendered image, returns a JSON grid of bilinearly-interpolated elevation values in metres, row-major from the north-west corner:
+
+```json
+{ "samples": 64, "data": [123.4, 125.1, ...] }
+```
+
+#### Viewshed (line-of-sight horizon)
 
 ```
 GET /viewshed?lon=<longitude>&lat=<latitude>&radius=<km>&directions=<n>&steps=<n>&observerHeight=<m>&targetHeight=<m>&refraction=<bool>
@@ -190,7 +198,7 @@ Returns a GeoJSON `Feature` with a `Polygon` geometry — the boundary of furthe
 
 Note the shape can be sharply non-convex — a hillside 200m away can legitimately be the furthest visible point in one direction while an adjacent bearing looking down an open valley or coastline sees 20+ km, with no smooth transition between them.
 
-### Visibility (specific points)
+#### Visibility (specific points)
 
 ```
 GET /visibility?lon=<longitude>&lat=<latitude>&targets=<lon,lat[,altitude]|...>&observerHeight=<m>&targetHeight=<m>&refraction=<bool>&stepsPerKm=<n>
