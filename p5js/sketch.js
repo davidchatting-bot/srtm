@@ -35,8 +35,9 @@ function preload() {
 }
 
 function setup() {
-  // Compute grid size and tile zoom from SRTM resolution now that _srtmInfo is ready
-  const pixelDeg = _srtmInfo.pixelDeg;
+  // Compute grid size and tile zoom from SRTM resolution now that _srtmInfo is ready.
+  // pixelDeg is per-tile; assumes all loaded tiles share one resolution (SRTM1 or SRTM3, not mixed).
+  const pixelDeg = _srtmInfo.files[0].pixelDeg;
   const lonSpan  = 2 * RADIUS_KM / (111.32 * Math.cos(LAT_DEFAULT * Math.PI / 180));
   const latSpan  = 2 * RADIUS_KM / 111.32;
   GRID_W    = Math.min(MAX_BARS, Math.round(lonSpan / pixelDeg));

@@ -53,15 +53,15 @@ sudo systemctl enable --now srtm
 GET /info
 ```
 
-Returns JSON describing the loaded SRTM data, including the region each tile covers:
+Returns JSON describing each loaded SRTM tile:
 
 ```json
-{ "pixelDeg": 0.000833, "files": [
-  { "name": "N37W123.hgt", "region": { "minLon": -123, "maxLon": -122, "minLat": 37, "maxLat": 38 } }
+{ "files": [
+  { "name": "N37W123.hgt", "pixelDeg": 0.000833, "region": { "minLon": -123, "maxLon": -122, "minLat": 37, "maxLat": 38 } }
 ] }
 ```
 
-`pixelDeg` is the native sample spacing in degrees (1/1200 for SRTM3, 1/3600 for SRTM1). Each entry in `files` is one loaded `.hgt` tile with its `region` — the 1°×1° bounding box (decimal degrees) it covers, parsed from its filename.
+Each entry in `files` is one loaded `.hgt` tile: `pixelDeg` is its native sample spacing in degrees (1/1200 for SRTM3, 1/3600 for SRTM1), and `region` is the 1°×1° bounding box (decimal degrees) it covers, parsed from its filename. Both are per-file rather than assumed uniform, since a `data/` directory could in principle mix SRTM1 and SRTM3 tiles.
 
 ### Slippy map tiles
 

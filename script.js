@@ -47,6 +47,15 @@ function writeCache(filePath, svg) {
 // Resolution is inferred from file size: 1201×1201 (SRTM3) or 3601×3601 (SRTM1).
 // Origin is parsed from the filename (SW corner of the 1°×1° tile).
 
+// Derives a tile's sample spacing from its file size alone (1201x1201 for
+// SRTM3, 3601x3601 for SRTM1 - 2 bytes/sample), without reading its
+// elevation data.
+function tilePixelDeg(filePath) {
+  const { size: byteLength } = fs.statSync(filePath);
+  const gridSize = Math.round(Math.sqrt(byteLength / 2));
+  return 1 / (gridSize - 1);
+}
+
 // Parses the 1x1-degree bounds a tile covers from its filename alone (e.g.
 // N51W001.hgt -> 51-52N, 1-0W), without reading the file's elevation data.
 function parseTileBounds(filePath) {
@@ -464,11 +473,14 @@ function smoothPathD(points, closed, scale) {
 app.get("/info", (req, res) => {
   const names = fs.readdirSync(DATA_DIR).filter(f => f.endsWith(".hgt"));
   if (names.length === 0) return res.status(404).json({ error: "No data" });
-  const { pixelDeg } = openHGT(path.join(DATA_DIR, names[0]));
 
-  const files = names.map(name => ({ name, region: parseTileBounds(name) }));
+  const files = names.map(name => ({
+    name,
+    pixelDeg: tilePixelDeg(path.join(DATA_DIR, name)),
+    region: parseTileBounds(name),
+  }));
 
-  res.json({ pixelDeg, files });
+  res.json({ files });
 });
 
 app.get("/heightmap", (req, res) => {
