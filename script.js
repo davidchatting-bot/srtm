@@ -47,22 +47,25 @@ function writeCache(filePath, svg) {
 // Resolution is inferred from file size: 1201×1201 (SRTM3) or 3601×3601 (SRTM1).
 // Origin is parsed from the filename (SW corner of the 1°×1° tile).
 
-function openHGT(filePath) {
-  const data = fs.readFileSync(filePath);
-  const size = Math.round(Math.sqrt(data.length / 2)); // 1201 or 3601
-  const pixelDeg = 1 / (size - 1);
+// Parses the 1x1-degree bounds a tile covers from its filename alone (e.g.
+// N51W001.hgt -> 51-52N, 1-0W), without reading the file's elevation data.
+function parseTileBounds(filePath) {
   const name = path.basename(filePath, ".hgt");
   const swLat = (name[0] === "N" ? 1 : -1) * parseInt(name.slice(1, 3));
   const swLon = (name[3] === "E" ? 1 : -1) * parseInt(name.slice(4, 7));
   return {
-    data,
-    size,
-    pixelDeg,
     minLon: swLon,
     maxLon: swLon + 1,
     minLat: swLat,
     maxLat: swLat + 1, // north edge
   };
+}
+
+function openHGT(filePath) {
+  const data = fs.readFileSync(filePath);
+  const size = Math.round(Math.sqrt(data.length / 2)); // 1201 or 3601
+  const pixelDeg = 1 / (size - 1);
+  return { data, size, pixelDeg, ...parseTileBounds(filePath) };
 }
 
 function readHGTRegion(hgt, tx1, ty1, w, h) {
@@ -462,7 +465,17 @@ app.get("/info", (req, res) => {
   const files = fs.readdirSync(DATA_DIR).filter(f => f.endsWith(".hgt"));
   if (files.length === 0) return res.status(404).json({ error: "No data" });
   const { pixelDeg } = openHGT(path.join(DATA_DIR, files[0]));
-  res.json({ pixelDeg, files });
+
+  let minLon = Infinity, maxLon = -Infinity, minLat = Infinity, maxLat = -Infinity;
+  for (const f of files) {
+    const b = parseTileBounds(f);
+    minLon = Math.min(minLon, b.minLon);
+    maxLon = Math.max(maxLon, b.maxLon);
+    minLat = Math.min(minLat, b.minLat);
+    maxLat = Math.max(maxLat, b.maxLat);
+  }
+
+  res.json({ pixelDeg, files, region: { minLon, maxLon, minLat, maxLat } });
 });
 
 app.get("/heightmap", (req, res) => {
@@ -755,20 +768,23 @@ app.get("/terrain", (req, res) => {
       }
     }
 
-    let min = Infinity, max = -Infinity;
-    for (const v of outputRaster) {
-      if (!isNaN(v)) { if (v < min) min = v; if (v > max) max = v; }
-    }
-    if (min === Infinity) return res.status(404).send("No elevation data available for this area");
+    if (!outputRaster.some(v => !isNaN(v))) return res.status(404).send("No elevation data available for this area");
 
-    const range = max - min || 1;
+    // Same fixed-range 16-bit R/G encoding as /tiles, so a /terrain image and
+    // a /tiles mosaic of the same area are pixel-for-pixel interchangeable.
     const png = new PNG({ width: outWidth, height: outHeight });
     for (let i = 0; i < outputRaster.length; i++) {
       const val = outputRaster[i];
-      const norm = isNaN(val) ? 0 : Math.floor(((val - min) / range) * 255);
       const idx = i * 4;
-      png.data[idx] = norm; png.data[idx + 1] = norm; png.data[idx + 2] = norm;
-      png.data[idx + 3] = isNaN(val) ? 0 : 255;
+      if (isNaN(val)) {
+        png.data[idx + 3] = 0;
+      } else {
+        const v16 = Math.max(0, Math.min(65535, Math.round(((val - ELEV_MIN) / ELEV_RANGE) * 65535)));
+        png.data[idx]     = (v16 >> 8) & 0xff;
+        png.data[idx + 1] = v16 & 0xff;
+        png.data[idx + 2] = 0;
+        png.data[idx + 3] = 255;
+      }
     }
 
     res.setHeader("Content-Type", "image/png");

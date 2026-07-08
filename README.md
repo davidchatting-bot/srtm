@@ -53,13 +53,13 @@ sudo systemctl enable --now srtm
 GET /info
 ```
 
-Returns JSON describing the loaded SRTM data:
+Returns JSON describing the loaded SRTM data and the geographic region it covers:
 
 ```json
-{ "pixelDeg": 0.000833, "files": ["N37W123.hgt"] }
+{ "pixelDeg": 0.000833, "files": ["N37W123.hgt"], "region": { "minLon": -123, "maxLon": -122, "minLat": 37, "maxLat": 38 } }
 ```
 
-`pixelDeg` is the native sample spacing in degrees (1/1200 for SRTM3, 1/3600 for SRTM1).
+`pixelDeg` is the native sample spacing in degrees (1/1200 for SRTM3, 1/3600 for SRTM1). `region` is the bounding box (decimal degrees) spanning every loaded `.hgt` tile — it's the union of their bounds, so it isn't necessarily fully covered if the tiles aren't contiguous.
 
 ### Slippy map tiles
 
@@ -73,7 +73,7 @@ Standard XYZ tiles compatible with Leaflet, OpenLayers, Mapbox GL, etc.:
 L.tileLayer('http://localhost:3000/tiles/{z}/{x}/{y}.png').addTo(map);
 ```
 
-Elevation is encoded at 16-bit precision across the R and G channels (`R << 8 | G`) over a fixed range of −500 m to 8500 m, so neighbouring tiles are visually consistent — this is not a grayscale image, R and G individually look like arbitrary noise. Decode with `(v16 / 65535) * 9000 − 500`. Areas with no data are transparent.
+Elevation is encoded at 16-bit precision across the R and G channels (`R << 8 | G`) over a fixed range of −500 m to 8500 m, so neighbouring tiles are visually consistent — this is not a greyscale image, R and G individually look like arbitrary noise. Decode with `(v16 / 65535) * 9000 − 500`. Areas with no data are transparent.
 
 ### Bounding-box terrain image
 
@@ -87,7 +87,7 @@ GET /terrain?lon=<longitude>&lat=<latitude>&radius=<km>
 | `lat` | yes | — | Latitude in decimal degrees |
 | `radius` | no | 5 | Radius in kilometres |
 
-Returns a grayscale PNG at full SRTM resolution centred on the given point. Brightness is normalised to the local min/max elevation.
+Returns a PNG at full SRTM resolution centred on the given point, using the same fixed-range 16-bit R/G encoding as `/tiles` (`R << 8 | G` over −500 m to 8500 m — decode with `(v16 / 65535) * 9000 − 500`), so a `/terrain` image and a `/tiles` mosaic of the same area are pixel-for-pixel interchangeable. Areas with no data are transparent.
 
 ### Bounding-box terrain data (JSON)
 
