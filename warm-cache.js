@@ -32,7 +32,7 @@ function lonLatToTile(lon, lat, z) {
 async function warmTile(baseUrl, z, x, y) {
   // Matches the URL contours.html's tile layer actually requests by default
   // (see buildTileUrl() in p5js/contours.html) — same params, same cache key.
-  const url = `${baseUrl}/contour-tiles/${z}/${x}/${y}.svg?resolution=128&strokeWidth=1`;
+  const url = `${baseUrl}/contour-tiles/${z}/${x}/${y}.svg?resolution=128`;
   const res = await fetch(url);
   return { z, x, y, status: res.status, ok: res.ok };
 }

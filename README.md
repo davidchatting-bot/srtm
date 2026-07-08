@@ -66,25 +66,26 @@ L.tileLayer('http://localhost:3000/tiles/{z}/{x}/{y}.png').addTo(map);
 #### Bounding-box terrain image
 
 ```
-GET /terrain?lon=<longitude>&lat=<latitude>&radius=<km>
+GET /terrain?lon=<longitude>&lat=<latitude>&radius=<km>&resolution=<n>
 ```
 
 | Parameter | Required | Default | Description |
 |-----------|----------|---------|-------------|
 | `lon` | yes | — | Longitude in decimal degrees |
 | `lat` | yes | — | Latitude in decimal degrees |
-| `radius` | no | 5 | Radius in kilometres |
+| `radius` | yes | — | Radius in kilometres |
+| `resolution` | no | full SRTM resolution | Output size (NxN), 8–2000. Omit for an exact per-pixel native-resolution image (not necessarily square); if given, bilinearly resamples to a square grid instead |
 
-Returns a PNG at full SRTM resolution centred on the given point.
+Returns a PNG centred on the given point.
 
 ### SVG
 
-Both endpoints below render contour lines the same way: marching squares over a bilinearly-interpolated, resampled elevation grid, with each contour chained into a single path and rendered as a quadratic-Bezier smoothed curve rather than raw straight segments, to avoid a blocky/faceted look. Each line is shaded a level of grey mapped from its elevation via `greyMin`/`greyMax` (default −500 / 8500, spanning sea-level to Everest) onto grey 0–255 — narrow this to the area's actual elevation range (e.g. `greyMin=0&greyMax=150`) for visible contrast, since the default range crushes modest local relief (most of the UK, ~0–200m) into a sliver of near-black grey.
+Both endpoints below render contour lines the same way: marching squares over a bilinearly-interpolated, resampled elevation grid, with each contour chained into a single path and rendered as a quadratic-Bezier smoothed curve rather than raw straight segments, to avoid a blocky/faceted look. Each line is a 1px stroke shaded a level of grey mapped from its elevation over the fixed −500 m to 8500 m range onto grey 0–255 — the same range as the [PNG](#png) endpoints above.
 
 #### Contour map
 
 ```
-GET /contours.svg?lon=<longitude>&lat=<latitude>&radius=<km>&resolution=<n>&interval=<m>&size=<px>&strokeWidth=<px>&greyMin=<m>&greyMax=<m>
+GET /contours.svg?lon=<longitude>&lat=<latitude>&radius=<km>&resolution=<n>&interval=<m>&size=<px>
 ```
 
 | Parameter | Required | Default | Description |
@@ -95,23 +96,19 @@ GET /contours.svg?lon=<longitude>&lat=<latitude>&radius=<km>&resolution=<n>&inte
 | `resolution` | no | 100 | Sampling grid size (NxN), 8–400 |
 | `interval` | no | auto | Contour interval in metres; auto picks a "nice" interval for ~12 levels across the local elevation range |
 | `size` | no | 800 | Output SVG width/height in pixels |
-| `strokeWidth` | no | 1 | Contour line stroke width in pixels |
-| `greyMin` / `greyMax` | no | -500 / 8500 | Elevation range (metres) mapped to grey 0–255 — see above |
 
 Returns an SVG image with one contour line per elevation level.
 
 #### Contour slippy tiles
 
 ```
-GET /contour-tiles/:z/:x/:y.svg?resolution=<n>&interval=<m>&strokeWidth=<px>&greyMin=<m>&greyMax=<m>
+GET /contour-tiles/:z/:x/:y.svg?resolution=<n>&interval=<m>
 ```
 
 | Parameter | Required | Default | Description |
 |-----------|----------|---------|-------------|
 | `resolution` | no | 128 | Sampling grid size per tile (NxN), 8–256 |
 | `interval` | no | by zoom | Contour interval in metres. Default is keyed by zoom level only, so every tile at a given zoom uses the same levels and lines connect across tile edges — a per-tile auto interval based on local relief would pick different levels per tile and the lines wouldn't line up |
-| `strokeWidth` | no | 1 | Contour line stroke width in pixels |
-| `greyMin` / `greyMax` | no | -500 / 8500 | Same elevation→grey range as above — must match across every tile in a session for neighbouring tiles to agree on which grey a given elevation gets |
 
 The zoom-keyed interval default mirrors real OS leisure-map intervals, anchored at the zoom level the equivalent published scale converts to (`metresPerPixel = 156543 * cos(lat) / 2^z`, equator-approximate):
 
@@ -170,6 +167,10 @@ The raw-data counterpart to `/terrain`: instead of a rendered image, returns a J
 { "samples": 64, "data": [123.4, 125.1, ...] }
 ```
 
+### Line-of-sight
+
+Both endpoints below are two views onto the same line-of-sight test, sharing one implementation (`lineOfSightAngle`/`lineOfSightAngleAtElevation`) — see [How line-of-sight is calculated](#how-line-of-sight-is-calculated) below for the underlying algorithm. `/viewshed` scans outward from the observer to find the visibility boundary in every direction; `/visibility` instead checks specific target points against the observer. Both return JSON.
+
 #### Viewshed (line-of-sight horizon)
 
 ```
@@ -187,7 +188,7 @@ GET /viewshed?lon=<longitude>&lat=<latitude>&radius=<km>&directions=<n>&steps=<n
 | `targetHeight` | no | 0 | Height (metres) added to every sampled target point, e.g. to ask "can I see the top of a 10m mast" |
 | `refraction` | no | true | Whether to apply the standard 7/6-Earth-radius correction for atmospheric refraction (pass `false` for pure geometric line of sight) |
 
-For each bearing, marches outward sampling elevation (bilinearly interpolated, same as the other endpoints) and tracks the point with the steepest line-of-sight angle seen so far — a point further out is only "visible" if its angle clears every closer point along that bearing, accounting for Earth's curvature. The single furthest visible point per bearing becomes one vertex of the returned shape. No-data samples (e.g. open sea beyond the loaded tiles) are treated as sea level rather than a gap, so looking out to sea still gives a sensible curvature-limited range. See [How line-of-sight is calculated](#how-line-of-sight-is-calculated) below for the underlying algorithm.
+For each bearing, marches outward sampling elevation (bilinearly interpolated, same as the other endpoints) and tracks the point with the steepest line-of-sight angle seen so far — a point further out is only "visible" if its angle clears every closer point along that bearing, accounting for Earth's curvature. The single furthest visible point per bearing becomes one vertex of the returned shape. No-data samples (e.g. open sea beyond the loaded tiles) are treated as sea level rather than a gap, so looking out to sea still gives a sensible curvature-limited range.
 
 Returns a GeoJSON `Feature` with a `Polygon` geometry — the boundary of furthest visibility in every direction:
 
@@ -204,8 +205,6 @@ Note the shape can be sharply non-convex — a hillside 200m away can legitimate
 GET /visibility?lon=<longitude>&lat=<latitude>&targets=<lon,lat[,altitude]|...>&observerHeight=<m>&targetHeight=<m>&refraction=<bool>&stepsPerKm=<n>
 POST /visibility   { "lon", "lat", "targets": [[lon, lat], [lon, lat, altitude], ...], "observerHeight", "targetHeight", "refraction", "stepsPerKm" }
 ```
-
-The other side of the same line-of-sight test as `/viewshed`: instead of scanning outward to find the visibility boundary, checks specific target points against the observer.
 
 GET packs `targets` into the query string, which is fine for a handful of points but overflows the server's request-header limit (HTTP 431) somewhere in the low hundreds. POST takes the same data as a JSON body instead, with no such limit — use it for any non-trivial target list.
 
@@ -288,7 +287,7 @@ Because both are discretized (a finite number of bearings/steps, a finite sampli
 
 `/contours.svg` and `/contour-tiles/:z/:x/:y.svg` are backed by a disk cache at `cache/` (gitignored, created on first use). Each request's parameters are hashed into a cache key; a hit is served straight off disk, a miss is computed as normal and then written to the cache before responding. Node still needs to be running to serve requests (cache misses fall through to the normal compute path, and there's no separate static-serving tier), but once an area has been requested it's cheap to re-serve, and you can pre-warm the cache for a demo area by just requesting it ahead of time (e.g. with `curl`, or by panning the slippy map yourself) so sharing the demo doesn't trigger a slow first render for the next viewer.
 
-The cache key includes every parameter that affects the output (location/tile coordinates, resolution, interval, stroke width, size), so different query strings never collide.
+The cache key includes every parameter that affects the output (location/tile coordinates, resolution, interval, size), so different query strings never collide.
 
 ### Pre-warming the cache
 

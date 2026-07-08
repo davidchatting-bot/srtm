@@ -126,11 +126,6 @@ function buildTileQuery() {
   const interval = document.getElementById('interval-input').value;
   if (interval) params.set('interval', interval);
   params.set('resolution', document.getElementById('resolution-input').value);
-  params.set('strokeWidth', document.getElementById('stroke-input').value);
-  const greyMin = document.getElementById('grey-min-input').value;
-  if (greyMin) params.set('greyMin', greyMin);
-  const greyMax = document.getElementById('grey-max-input').value;
-  if (greyMax) params.set('greyMax', greyMax);
   return params.toString();
 }
 

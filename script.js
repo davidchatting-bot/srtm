@@ -237,18 +237,12 @@ function intervalForZoom(z) {
   return 1; // ~1:5,000 and closer — survey/LIDAR-grade resolution territory
 }
 
-// Elevation → greyscale. Defaults to the fixed -500m..8500m range (same range
-// the /tiles encoding uses) so a given elevation renders the same grey
-// regardless of any one tile's local min/max — needed for contours to read
-// consistently as you pan/zoom across tiles. That global range spans
-// sea-level to Everest though, so anywhere with modest relief (most of the
-// UK, say 0-200m) only occupies a sliver of it — every line ends up nearly
-// the same near-black grey. Callers can narrow greyMin/greyMax to the area's
-// actual relief for visible contrast; as long as the same range is used for
-// every tile in a session (the demo page does this), cross-tile consistency
-// is preserved — it's just consistent over a different, chosen range.
-function greyForElevation(elev, greyMin = ELEV_MIN, greyMax = ELEV_MAX) {
-  const t = Math.max(0, Math.min(1, (elev - greyMin) / (greyMax - greyMin || 1)));
+// Elevation → greyscale, over the fixed -500m..8500m range (same range the
+// /tiles encoding uses) so a given elevation renders the same grey regardless
+// of any one tile's local min/max — needed for contours to read consistently
+// as you pan/zoom across tiles.
+function greyForElevation(elev) {
+  const t = Math.max(0, Math.min(1, (elev - ELEV_MIN) / ELEV_RANGE));
   const g = Math.round(t * 255);
   return `rgb(${g},${g},${g})`;
 }
@@ -515,12 +509,9 @@ app.get("/contours.svg", (req, res) => {
     const radiusKm = parseFloat(req.query.radius) || 5;
     const samples = Math.min(400, Math.max(8, parseInt(req.query.resolution) || 100));
     const size = Math.min(2000, Math.max(64, parseInt(req.query.size) || 800));
-    const strokeWidth = Math.min(10, Math.max(0.1, parseFloat(req.query.strokeWidth) || 1));
-    const greyMin = req.query.greyMin !== undefined ? parseFloat(req.query.greyMin) : ELEV_MIN;
-    const greyMax = req.query.greyMax !== undefined ? parseFloat(req.query.greyMax) : ELEV_MAX;
     if (isNaN(lon) || isNaN(lat)) return res.status(400).send("Invalid lon/lat");
 
-    const cacheFile = cachePath("contours", { lon, lat, radiusKm, samples, size, strokeWidth, greyMin, greyMax, interval: req.query.interval || "auto" });
+    const cacheFile = cachePath("contours", { lon, lat, radiusKm, samples, size, interval: req.query.interval || "auto" });
     const cached = readCache(cacheFile);
     if (cached) return res.type("image/svg+xml").send(cached);
 
@@ -551,8 +542,8 @@ app.get("/contours.svg", (req, res) => {
     for (let level = Math.ceil(min / interval) * interval; level < max; level += interval) {
       const segments = marchingSquares(grid, samples, samples, level);
       if (segments.length === 0) continue;
-      const grey = greyForElevation(level, greyMin, greyMax);
-      body += `<g stroke="${grey}" stroke-width="${strokeWidth}" fill="none" stroke-linecap="round" stroke-linejoin="round">`;
+      const grey = greyForElevation(level);
+      body += `<g stroke="${grey}" stroke-width="1" fill="none" stroke-linecap="round" stroke-linejoin="round">`;
       for (const chain of chainSegments(segments)) {
         const d = smoothPathD(chain.points, chain.closed, scale);
         if (d) body += `<path d="${d}"/>`;
@@ -582,11 +573,8 @@ app.get("/contour-tiles/:z/:x/:y.svg", (req, res) => {
     if (isNaN(z) || isNaN(x) || isNaN(y)) return res.status(400).send("Invalid tile coordinates");
 
     const samples = Math.min(256, Math.max(8, parseInt(req.query.resolution) || 128));
-    const strokeWidth = Math.min(5, Math.max(0.1, parseFloat(req.query.strokeWidth) || 1));
-    const greyMin = req.query.greyMin !== undefined ? parseFloat(req.query.greyMin) : ELEV_MIN;
-    const greyMax = req.query.greyMax !== undefined ? parseFloat(req.query.greyMax) : ELEV_MAX;
 
-    const cacheFile = cachePath(`contour-tiles/${z}`, { x, y, resolution: samples, interval: req.query.interval || "auto", strokeWidth, greyMin, greyMax });
+    const cacheFile = cachePath(`contour-tiles/${z}`, { x, y, resolution: samples, interval: req.query.interval || "auto" });
     const cached = readCache(cacheFile);
     if (cached) return res.type("image/svg+xml").send(cached);
 
@@ -647,8 +635,8 @@ app.get("/contour-tiles/:z/:x/:y.svg", (req, res) => {
     for (let level = Math.ceil(min / interval) * interval; level <= max; level += interval) {
       const segments = marchingSquares(grid, samples, samples, level);
       if (segments.length === 0) continue;
-      const grey = greyForElevation(level, greyMin, greyMax);
-      body += `<g stroke="${grey}" stroke-width="${strokeWidth}" fill="none" stroke-linecap="round" stroke-linejoin="round">`;
+      const grey = greyForElevation(level);
+      body += `<g stroke="${grey}" stroke-width="1" fill="none" stroke-linecap="round" stroke-linejoin="round">`;
       for (const chain of chainSegments(segments)) {
         const d = smoothPathD(chain.points, chain.closed, scale);
         if (d) body += `<path d="${d}"/>`;
@@ -709,8 +697,12 @@ app.get("/terrain", (req, res) => {
   try {
     const lon = parseFloat(req.query.lon);
     const lat = parseFloat(req.query.lat);
-    const radiusKm = parseFloat(req.query.radius) || 5;
-    if (isNaN(lon) || isNaN(lat)) return res.status(400).send("Invalid lon/lat");
+    const radiusKm = parseFloat(req.query.radius);
+    if (isNaN(lon) || isNaN(lat) || isNaN(radiusKm)) return res.status(400).send("Invalid lon/lat/radius");
+
+    const resolution = req.query.resolution !== undefined
+      ? Math.min(2000, Math.max(8, parseInt(req.query.resolution)))
+      : null;
 
     const { latOffset, lonOffset } = kmToDegreeOffsets(lat, radiusKm);
     const minLon = lon - lonOffset;
@@ -718,62 +710,83 @@ app.get("/terrain", (req, res) => {
     const minLat = lat - latOffset;
     const maxLat = lat + latOffset;
 
-    const tileNames = getTileNamesForBounds(minLon, minLat, maxLon, maxLat);
-    console.log("Requested .hgt tile filenames:", tileNames);
+    let outWidth, outHeight, outputRaster;
 
-    const available = tileNames
-      .map(name => path.join(DATA_DIR, name))
-      .filter(fp => fs.existsSync(fp));
+    if (resolution) {
+      // Resampled path: bilinear-sample a resolution x resolution grid, same
+      // approach as /heightmap, trading exact native pixels for a fixed output size.
+      const cache = loadSRTMCache(minLon, minLat, maxLon, maxLat);
+      if (cache.size === 0) return res.status(404).send("No elevation data available for this area");
 
-    if (available.length === 0) {
-      console.warn("No .hgt files found for tiles:", tileNames);
-      return res.status(404).send("No local data available for this location");
-    }
+      outWidth = outHeight = resolution;
+      outputRaster = new Float32Array(resolution * resolution);
+      for (let row = 0; row < resolution; row++) {
+        for (let col = 0; col < resolution; col++) {
+          const sLon = minLon + (col / (resolution - 1)) * (maxLon - minLon);
+          const sLat = maxLat - (row / (resolution - 1)) * (maxLat - minLat);
+          outputRaster[row * resolution + col] = sampleCache(cache, sLon, sLat);
+        }
+      }
+      if (!outputRaster.some(v => !isNaN(v))) return res.status(404).send("No elevation data available for this area");
+    } else {
+      // Full native-resolution path: exact per-pixel HGT samples, no interpolation.
+      const tileNames = getTileNamesForBounds(minLon, minLat, maxLon, maxLat);
+      console.log("Requested .hgt tile filenames:", tileNames);
 
-    const { pixelDeg } = openHGT(available[0]);
-    const outWidth  = Math.ceil((maxLon - minLon) / pixelDeg);
-    const outHeight = Math.ceil((maxLat - minLat) / pixelDeg);
-    if (outWidth <= 0 || outHeight <= 0) return res.status(400).send("Requested area is out of bounds");
+      const available = tileNames
+        .map(name => path.join(DATA_DIR, name))
+        .filter(fp => fs.existsSync(fp));
 
-    const outputRaster = new Float32Array(outWidth * outHeight).fill(NaN);
+      if (available.length === 0) {
+        console.warn("No .hgt files found for tiles:", tileNames);
+        return res.status(404).send("No local data available for this location");
+      }
 
-    for (const filePath of available) {
-      const hgt = openHGT(filePath);
-      const { minLon: tMinLon, maxLon: tMaxLon, minLat: tMinLat, maxLat: tMaxLat, size } = hgt;
+      const { pixelDeg } = openHGT(available[0]);
+      outWidth  = Math.ceil((maxLon - minLon) / pixelDeg);
+      outHeight = Math.ceil((maxLat - minLat) / pixelDeg);
+      if (outWidth <= 0 || outHeight <= 0) return res.status(400).send("Requested area is out of bounds");
 
-      const oMinLon = Math.max(minLon, tMinLon);
-      const oMaxLon = Math.min(maxLon, tMaxLon);
-      const oMinLat = Math.max(minLat, tMinLat);
-      const oMaxLat = Math.min(maxLat, tMaxLat);
-      if (oMinLon >= oMaxLon || oMinLat >= oMaxLat) continue;
+      outputRaster = new Float32Array(outWidth * outHeight).fill(NaN);
 
-      const tx1 = Math.max(0, Math.floor((oMinLon - tMinLon) / pixelDeg));
-      const tx2 = Math.min(size, Math.ceil((oMaxLon - tMinLon) / pixelDeg));
-      const ty1 = Math.max(0, Math.floor((tMaxLat - oMaxLat) / pixelDeg));
-      const ty2 = Math.min(size, Math.ceil((tMaxLat - oMinLat) / pixelDeg));
+      for (const filePath of available) {
+        const hgt = openHGT(filePath);
+        const { minLon: tMinLon, maxLon: tMaxLon, minLat: tMinLat, maxLat: tMaxLat, size } = hgt;
 
-      const rw = tx2 - tx1;
-      const rh = ty2 - ty1;
-      if (rw <= 0 || rh <= 0) continue;
+        const oMinLon = Math.max(minLon, tMinLon);
+        const oMaxLon = Math.min(maxLon, tMaxLon);
+        const oMinLat = Math.max(minLat, tMinLat);
+        const oMaxLat = Math.min(maxLat, tMaxLat);
+        if (oMinLon >= oMaxLon || oMinLat >= oMaxLat) continue;
 
-      const region = readHGTRegion(hgt, tx1, ty1, rw, rh);
-      const readOriginLon = tMinLon + tx1 * pixelDeg;
-      const readOriginLat = tMaxLat - ty1 * pixelDeg;
-      const outOffX = Math.round((readOriginLon - minLon) / pixelDeg);
-      const outOffY = Math.round((maxLat - readOriginLat) / pixelDeg);
+        const tx1 = Math.max(0, Math.floor((oMinLon - tMinLon) / pixelDeg));
+        const tx2 = Math.min(size, Math.ceil((oMaxLon - tMinLon) / pixelDeg));
+        const ty1 = Math.max(0, Math.floor((tMaxLat - oMaxLat) / pixelDeg));
+        const ty2 = Math.min(size, Math.ceil((tMaxLat - oMinLat) / pixelDeg));
 
-      for (let row = 0; row < rh; row++) {
-        for (let col = 0; col < rw; col++) {
-          const outX = outOffX + col;
-          const outY = outOffY + row;
-          if (outX >= 0 && outX < outWidth && outY >= 0 && outY < outHeight) {
-            outputRaster[outY * outWidth + outX] = region[row * rw + col];
+        const rw = tx2 - tx1;
+        const rh = ty2 - ty1;
+        if (rw <= 0 || rh <= 0) continue;
+
+        const region = readHGTRegion(hgt, tx1, ty1, rw, rh);
+        const readOriginLon = tMinLon + tx1 * pixelDeg;
+        const readOriginLat = tMaxLat - ty1 * pixelDeg;
+        const outOffX = Math.round((readOriginLon - minLon) / pixelDeg);
+        const outOffY = Math.round((maxLat - readOriginLat) / pixelDeg);
+
+        for (let row = 0; row < rh; row++) {
+          for (let col = 0; col < rw; col++) {
+            const outX = outOffX + col;
+            const outY = outOffY + row;
+            if (outX >= 0 && outX < outWidth && outY >= 0 && outY < outHeight) {
+              outputRaster[outY * outWidth + outX] = region[row * rw + col];
+            }
           }
         }
       }
-    }
 
-    if (!outputRaster.some(v => !isNaN(v))) return res.status(404).send("No elevation data available for this area");
+      if (!outputRaster.some(v => !isNaN(v))) return res.status(404).send("No elevation data available for this area");
+    }
 
     // Same fixed-range 16-bit R/G encoding as /tiles, so a /terrain image and
     // a /tiles mosaic of the same area are pixel-for-pixel interchangeable.
