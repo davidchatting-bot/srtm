@@ -25,13 +25,7 @@ This service uses **NASA Shuttle Radar Topography Mission Global 1 arc second V0
 
 - Dataset: https://doi.org/10.5067/MEASURES/SRTM/SRTMGL1.003
 
-Files should follow the standard naming convention (e.g. `N51W001.hgt`) and be placed in the `data/` directory at the project root — it's included in the repo (empty) precisely so you have somewhere to drop tiles into. Only tiles covering the area(s) you want to view/query are needed — the server just skips locations it has no matching tile for (see `/info` below to check what's currently loaded).
-
-#### Data license
-
-The SRTM dataset is freely available under the [EOSDIS Data Use Policy](https://www.earthdata.nasa.gov/engage/open-data-services-and-software/data-use-policy). Use requires the following citation:
-
-> NASA JPL (2013). *NASA Shuttle Radar Topography Mission Global 1 arc second* [Data set]. NASA Land Processes Distributed Active Archive Center. https://doi.org/10.5067/MEASURES/SRTM/SRTMGL1.003
+Files should follow the standard naming convention (e.g. `N51W001.hgt`) and be placed in the `data/` directory at the project root — it's included in the repo (empty) precisely so you have somewhere to drop tiles into. Only tiles covering the area(s) you want to view/query are needed — the server just skips locations it has no matching tile for (see `/info` below to check what's currently loaded). See [Data license](#data-license) below for usage/citation requirements.
 
 ### 4. Run
 
@@ -300,6 +294,12 @@ A target given as `lon,lat` is assumed to sit at ground level — whatever that 
 ```
 
 Because `/viewshed` and `/visibility` sample at different resolutions (a fixed step count over a fixed radius vs. a fixed density per path, since every target is a different distance away), they can disagree right at a visibility boundary — a point `/viewshed` reports as its furthest-visible in some direction might come back `visible: false` here at the default `stepsPerKm`, because the finer sampling along that specific path catches an intermediate obstruction the coarser radial scan stepped over. Raising `stepsPerKm` (or lowering `/viewshed`'s `steps`) narrows that gap; neither endpoint is "wrong", they're both discretized approximations of a continuous problem.
+
+## Data license
+
+The SRTM dataset is freely available under the [EOSDIS Data Use Policy](https://www.earthdata.nasa.gov/engage/open-data-services-and-software/data-use-policy). Use requires the following citation:
+
+> NASA JPL (2013). *NASA Shuttle Radar Topography Mission Global 1 arc second* [Data set]. NASA Land Processes Distributed Active Archive Center. https://doi.org/10.5067/MEASURES/SRTM/SRTMGL1.003
 
 ## License
 
