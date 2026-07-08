@@ -45,12 +45,6 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now srtm
 ```
 
-## Viewer
-
-Open `http://localhost:3000` in a browser to see an isometric bar-chart of the terrain. It defaults to `LON_DEFAULT`/`LAT_DEFAULT` in `p5js/sketch.js` — currently 55°N, 1.6°W — but shows nothing until you've placed the matching `.hgt` tile(s) for that location (or your chosen one) in `data/`. Each bar represents one SRTM sample (~90 m for SRTM3, ~30 m for SRTM1). Bar height is proportional to elevation above sea level; colour is fixed: blue at sea level, green above. Drag to pan.
-
-To change location or view radius edit `LON_DEFAULT`/`LAT_DEFAULT`/`RADIUS_KM` at the top of `p5js/sketch.js`, or pass `?lat=<lat>&lon=<lon>` in the URL.
-
 ## Endpoints
 
 ### Data info
@@ -94,6 +88,25 @@ GET /terrain?lon=<longitude>&lat=<latitude>&radius=<km>
 | `radius` | no | 5 | Radius in kilometres |
 
 Returns a grayscale PNG at full SRTM resolution centred on the given point. Brightness is normalised to the local min/max elevation.
+
+### Bounding-box terrain data (JSON)
+
+```
+GET /heightmap?lon=<longitude>&lat=<latitude>&radius=<km>&samples=<n>
+```
+
+| Parameter | Required | Default | Description |
+|-----------|----------|---------|-------------|
+| `lon` | yes | — | Longitude in decimal degrees |
+| `lat` | yes | — | Latitude in decimal degrees |
+| `radius` | no | 1 | Radius in kilometres |
+| `samples` | no | 64 | Sampling grid size (NxN), 2–256 |
+
+The raw-data counterpart to `/terrain`: instead of a rendered image, returns a JSON grid of bilinearly-interpolated elevation values in metres, row-major from the north-west corner:
+
+```json
+{ "samples": 64, "data": [123.4, 125.1, ...] }
+```
 
 ### Contour map (SVG)
 
@@ -294,6 +307,12 @@ A target given as `lon,lat` is assumed to sit at ground level — whatever that 
 ```
 
 Because `/viewshed` and `/visibility` sample at different resolutions (a fixed step count over a fixed radius vs. a fixed density per path, since every target is a different distance away), they can disagree right at a visibility boundary — a point `/viewshed` reports as its furthest-visible in some direction might come back `visible: false` here at the default `stepsPerKm`, because the finer sampling along that specific path catches an intermediate obstruction the coarser radial scan stepped over. Raising `stepsPerKm` (or lowering `/viewshed`'s `steps`) narrows that gap; neither endpoint is "wrong", they're both discretized approximations of a continuous problem.
+
+## Viewer
+
+Open `http://localhost:3000` in a browser to see an isometric bar-chart of the terrain. It defaults to `LON_DEFAULT`/`LAT_DEFAULT` in `p5js/sketch.js` — currently 55°N, 1.6°W — but shows nothing until you've placed the matching `.hgt` tile(s) for that location (or your chosen one) in `data/`. Each bar represents one SRTM sample (~90 m for SRTM3, ~30 m for SRTM1). Bar height is proportional to elevation above sea level; colour is fixed: blue at sea level, green above. Drag to pan.
+
+To change location or view radius edit `LON_DEFAULT`/`LAT_DEFAULT`/`RADIUS_KM` at the top of `p5js/sketch.js`, or pass `?lat=<lat>&lon=<lon>` in the URL. Internally it's built on the same `/tiles` and `/info` endpoints documented above.
 
 ## Data license
 
