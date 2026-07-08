@@ -1070,6 +1070,77 @@ app.post("/visibility", (req, res) => {
   }
 });
 
+// How far (metres) the actual curved surface sits below a flat tangent plane
+// drawn from the start point and extended out to distance `d` km along the
+// path — zero at the start, growing as distance increases (the "things sink
+// below the horizon" effect of a single fixed vantage point, as opposed to a
+// symmetric dip/bulge relative to a chord between two arbitrary points).
+//
+// Same circle geometry as a chord sagitta, just anchored at one end instead
+// of the midpoint: place the start point on a circle of radius R at angle 0,
+// so its local tangent plane is the vertical line x=R; a point at arc-
+// distance d is at angle theta=d/R, i.e. x=R*cos(theta) — R*(1-cos(theta))
+// short of the tangent line. Reduces to the familiar d²/(2R) approximation
+// for small theta (Taylor-expand cos), but stays exact at any distance.
+function startTangentDropM(d) {
+  const theta = d / EARTH_RADIUS_KM;
+  return EARTH_RADIUS_KM * (1 - Math.cos(theta)) * 1000;
+}
+
+app.get("/line.svg", (req, res) => {
+  try {
+    const lon1 = parseFloat(req.query.lon1);
+    const lat1 = parseFloat(req.query.lat1);
+    const lon2 = parseFloat(req.query.lon2);
+    const lat2 = parseFloat(req.query.lat2);
+    if ([lon1, lat1, lon2, lat2].some(isNaN)) return res.status(400).send("Invalid lon1/lat1/lon2/lat2");
+
+    const curved = req.query.curved !== "false" && req.query.curved !== "0";
+    const samples = Math.min(2000, Math.max(8, parseInt(req.query.samples) || 200));
+    const width = Math.min(2000, Math.max(100, parseInt(req.query.width) || 800));
+    const height = Math.min(5000, Math.max(50, parseInt(req.query.height) || 200));
+
+    const totalKm = haversineDistanceKm(lon1, lat1, lon2, lat2);
+    const bearing = initialBearing(lon1, lat1, lon2, lat2);
+
+    const marginDeg = 0.02;
+    const cache = loadSRTMCache(
+      Math.min(lon1, lon2) - marginDeg, Math.min(lat1, lat2) - marginDeg,
+      Math.max(lon1, lon2) + marginDeg, Math.max(lat1, lat2) + marginDeg
+    );
+
+    // True to scale: one metres-per-pixel factor, derived from width/distance,
+    // applies to both axes — so the drawn cross-section isn't vertically
+    // exaggerated the way a conventional elevation-profile chart would be.
+    // Sea level sits at the bottom edge; anything that rises higher than
+    // `height` at that scale (real relief plus, if curved, the curvature
+    // bulge) is simply clipped by the viewBox rather than the chart
+    // rescaling itself to fit — pass a taller height to see more of it.
+    // Missing data (e.g. no .hgt tile loaded for part of the path) falls back
+    // to sea level rather than leaving a gap in the profile.
+    const scale = width / (totalKm * 1000 || 1); // px per metre
+
+    const points = new Array(samples);
+    for (let i = 0; i < samples; i++) {
+      const d = (i / (samples - 1)) * totalKm;
+      const { lon, lat } = destinationPoint(lon1, lat1, bearing, d);
+      const elev = elevationOrSeaLevel(cache, lon, lat);
+      const y = curved ? elev - startTangentDropM(d) : elev;
+      points[i] = `${(d * 1000 * scale).toFixed(1)},${(height - y * scale).toFixed(1)}`;
+    }
+
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">` +
+      `<polyline points="${points.join(" ")}" fill="none" stroke="#000" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>` +
+      `</svg>`;
+
+    res.setHeader("Content-Type", "image/svg+xml");
+    res.send(svg);
+  } catch (err) {
+    console.error(err);
+    res.status(500).send("Server error");
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Server running at http://localhost:${PORT}`);
 });

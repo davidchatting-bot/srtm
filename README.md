@@ -165,6 +165,24 @@ The raw-data counterpart to `/terrain`: instead of a rendered image, returns a J
 { "samples": 64, "data": [123.4, 125.1, ...] }
 ```
 
+### Terrain profile
+
+```
+GET /line.svg?lon1=<longitude>&lat1=<latitude>&lon2=<longitude>&lat2=<latitude>&curved=<bool>&samples=<n>&width=<px>&height=<px>
+```
+
+| Parameter | Required | Default | Description |
+|-----------|----------|---------|-------------|
+| `lon1` / `lat1` | yes | — | Start point (drawn on the left) |
+| `lon2` / `lat2` | yes | — | End point (drawn on the right) |
+| `curved` | no | true | Whether to add Earth's curvature (see below) or plot a flat cross-section ignoring it |
+| `samples` | no | 200 | Number of elevation samples along the path, 8–2000 |
+| `width` / `height` | no | 800 / 200 | Output SVG dimensions in pixels, 100–2000 / 50–5000 |
+
+Returns an SVG line chart of elevation along the great-circle path from the start point to the end point, drawn true to scale: one metres-per-pixel factor, derived from `width` and the distance between the points, applies to both axes, so the chart isn't vertically exaggerated the way a conventional elevation-profile tool would be. Sea level sits at the bottom edge; anything that rises higher than `height` at that scale — real relief, or the curvature drop below — is clipped by the canvas rather than the chart rescaling itself to fit, so pick a taller `height` to see subtle curvature over long distances. Missing data along the path (e.g. no `.hgt` tile loaded for that section) is treated as sea level rather than leaving a gap.
+
+When `curved` is enabled, the line starts flat at the start point and progressively drops away as distance from it grows — `R·(1 − cos(d/R))` metres at distance `d`, where `R` is Earth's radius — the same effect that makes distant things sink below the horizon as you get further from a fixed vantage point. `curved=false` plots the raw elevations instead, ignoring Earth's shape entirely.
+
 ### Line-of-sight
 
 Both endpoints below are two views onto the same line-of-sight test, sharing one implementation (`lineOfSightAngle`/`lineOfSightAngleAtElevation`): `/viewshed` scans outward from the observer to find the visibility boundary in every direction; `/visibility` instead checks specific target points against the observer. Both return JSON.
