@@ -59,7 +59,7 @@ Returns JSON describing the loaded SRTM data:
 { "pixelDeg": 0.000833, "files": ["N37W123.hgt"] }
 ```
 
-`pixelDeg` is the native sample spacing in degrees (1/1200 for SRTM3, 1/3600 for SRTM1). The viewer uses this to set the bar-chart resolution.
+`pixelDeg` is the native sample spacing in degrees (1/1200 for SRTM3, 1/3600 for SRTM1).
 
 ### Slippy map tiles
 
@@ -73,7 +73,7 @@ Standard XYZ tiles compatible with Leaflet, OpenLayers, Mapbox GL, etc.:
 L.tileLayer('http://localhost:3000/tiles/{z}/{x}/{y}.png').addTo(map);
 ```
 
-Elevation is encoded at 16-bit precision across the R and G channels (`R << 8 | G`) over a fixed range of −500 m to 8500 m, so neighbouring tiles are visually consistent — this is not a grayscale image, R and G individually look like arbitrary noise. The viewer decodes this as `(v16 / 65535) * 9000 − 500`. Areas with no data are transparent.
+Elevation is encoded at 16-bit precision across the R and G channels (`R << 8 | G`) over a fixed range of −500 m to 8500 m, so neighbouring tiles are visually consistent — this is not a grayscale image, R and G individually look like arbitrary noise. Decode with `(v16 / 65535) * 9000 − 500`. Areas with no data are transparent.
 
 ### Bounding-box terrain image
 
@@ -138,7 +138,7 @@ GET /contour-tiles/:z/:x/:y.svg?resolution=<n>&interval=<m>&strokeWidth=<px>&gre
 | `resolution` | no | 128 | Sampling grid size per tile (NxN), 8–256 |
 | `interval` | no | by zoom | Contour interval in metres. Default is keyed by zoom level only, so every tile at a given zoom uses the same levels and lines connect across tile edges — a per-tile auto interval based on local relief would pick different levels per tile and the lines wouldn't line up |
 | `strokeWidth` | no | 1 | Contour line stroke width in pixels |
-| `greyMin` / `greyMax` | no | -500 / 8500 | Same elevation→grey range as `/contours.svg` above. Narrowing it to the area's relief is what makes contour lines visually distinguishable instead of all rendering as nearly the same dark grey — as long as the same range is requested for every tile in a session (the demo page does this), neighbouring tiles still agree on which grey a given elevation gets |
+| `greyMin` / `greyMax` | no | -500 / 8500 | Same elevation→grey range as `/contours.svg` above. Narrowing it to the area's relief is what makes contour lines visually distinguishable instead of all rendering as nearly the same dark grey — as long as the same range is requested for every tile in a session, neighbouring tiles still agree on which grey a given elevation gets |
 
 The zoom-keyed interval default mirrors real OS leisure-map intervals, anchored at the zoom level the equivalent published scale converts to (`metresPerPixel = 156543 * cos(lat) / 2^z`, equator-approximate):
 
@@ -160,41 +160,66 @@ Standard XYZ contour tiles, greyscale-encoded the same way as `/contours.svg`, w
 L.tileLayer('http://localhost:3000/contour-tiles/{z}/{x}/{y}.svg').addTo(map);
 ```
 
-A pannable/zoomable demo page using these tiles is available at `/contours.html` (`p5js/contours-sketch.js`) — a p5.js sketch, not Leaflet: it fetches each tile's SVG itself, decodes it into a `p5.Image` via a local blob URL (drawing straight from the server URL makes the browser fetch the same SVG twice), and draws tiles directly to the canvas with its own pan (drag) handling, following the same tile-coordinate math as the isometric viewer's `sketch.js`.
+### Viewshed (line-of-sight horizon)
 
-Zooming is via the +/- buttons (bottom-right, `zoomIn()`/`zoomOut()`) only — scroll-wheel and trackpad pinch are deliberately disabled. A fast pinch gesture fires many wheel events in one frame, which both (a) is how a zoom-jump crash was triggered (see below) and (b) is exactly the kind of multi-step-at-once interaction the buttons rule out by construction — each click is its own single zoom step. `mouseWheel` still returns `false` so the gesture doesn't fall through to the browser's own page-scroll or native pinch-zoom. Button zooms centre on the view middle (there's no cursor position to anchor to from a click); a `zoomBy()`/`zoomIn()`/`zoomOut()` API is exposed globally if cursor-anchored wheel zoom is ever wanted back.
-
-It also exercises `/visibility`: on load (and on every "Go / Apply") it scatters the number of points given by "Test points" (default 500) randomly within "Test radius (km)" (default 10) of a fixed origin — marked with a yellow cross — asks `/visibility` whether each is visible from that origin, and plots them green (visible) or red (not). Both fields can also be set via URL params (`?points=20&testRadius=2`).
-
-Press **D** to flip between that random visibility cloud and the LoRa traceroute log at `p5js/data/log.csv` (gitignored — green for a `DIRECT` result, red otherwise, normalised into the same `visible` field so the colouring/export code doesn't need to know which dataset is active). Both datasets stay loaded at all times; `D` just changes which one `points` mirrors. The bottom-left info readout shows which is active and how many points it has.
-
-Deeper zooms need more tiles to cover the same screen area (e.g. 224 vs 56), so there's a brief window after zooming where the new zoom's tiles are still fetching. Rather than leaving that blank, `draw()` first draws the last zoom that *fully* loaded, scaled to fit the current view, underneath the current zoom's tiles — so zooming shows a blurry-but-present placeholder instead of a flash of grey.
-
-The actual tile *request* on each zoom step is debounced (150ms): rapidly clicking +/- repeatedly changes `zoomLevel` once per click, and requesting tiles on every single click would queue a full fetch+render batch per level passed through — leaving the zoom you actually land on stuck behind several already-irrelevant batches for several seconds. `zoomLevel`/`centerX`/`centerY` still update and redraw immediately on every click (so the placeholder below keeps the view responsive); only the network request waits for clicking to pause.
-
-Originally zoom was scroll-wheel/pinch driven, and a fast trackpad pinch gesture firing many wheel events in one frame (e.g. swinging `zoomLevel` 18 → 1 before `previousZoom` caught up) crashed the tab: the placeholder draw's scale factor is `2^(zoomLevel - previousZoom)`, and when that gap is large the implied tile size collapses toward zero, so `tilesAcross`/`tilesDown` (`ceil(viewportSize / tileSize)`) explodes into the hundreds of thousands — turning a nested loop that's normally a few dozen iterations into billions. Scroll/pinch are now disabled specifically so a gesture can't drive `zoomLevel` across many steps in a single frame, but the same jump is still reachable by rapidly clicking a zoom button many times before a redraw catches up, so the fix stayed in place rather than being removed: `tileRangeForZoom` caps the tile count at `MAX_PLACEHOLDER_TILES` (64) as a hard backstop, and `draw()` skips the placeholder pass entirely once the gap exceeds 6 levels.
-
-Its "Export SVG" button merges every tile currently on screen into a single flat SVG — reusing each tile's already-fetched markup, stripped of its outer `<svg>` wrapper and re-placed in a `<g transform="translate(...)">` at the screen position it was drawn at — plus the visible points, and downloads it as one seamless vector file (not a screenshot).
-
-### Contour cache
-
-`/contours.svg` and `/contour-tiles/:z/:x/:y.svg` are backed by a disk cache at `cache/` (gitignored, created on first use). Each request's parameters are hashed into a cache key; a hit is served straight off disk, a miss is computed as normal and then written to the cache before responding. Node still needs to be running to serve requests (cache misses fall through to the normal compute path, and there's no separate static-serving tier), but once an area has been requested it's cheap to re-serve, and you can pre-warm the cache for a demo area by just requesting it ahead of time (e.g. with `curl`, or by panning the slippy map yourself) so sharing the demo doesn't trigger a slow first render for the next viewer.
-
-The cache key includes every parameter that affects the output (location/tile coordinates, resolution, interval, stroke width, size), so different query strings never collide.
-
-#### Pre-warming the cache
-
-`warm-cache.js` requests the same tile URLs `contours.html`'s slippy map would, for a range of zooms around a point, so they're already cached before you share the demo:
-
-```bash
-node warm-cache.js                                              # defaults to Anstruther, zooms 12-17, radius 2 tiles
-node warm-cache.js --lat 56.2208 --lon -2.7036 --zooms 12-17 --radius 2
-node warm-cache.js --base-url http://localhost:3000 --concurrency 6
+```
+GET /viewshed?lon=<longitude>&lat=<latitude>&radius=<km>&directions=<n>&steps=<n>&observerHeight=<m>&targetHeight=<m>&refraction=<bool>
 ```
 
-It hits the running server over HTTP, so the server still needs to be up while warming. Once warmed, requests for that area come straight off disk regardless of who's asking.
+| Parameter | Required | Default | Description |
+|-----------|----------|---------|-------------|
+| `lon` | yes | — | Observer longitude in decimal degrees |
+| `lat` | yes | — | Observer latitude in decimal degrees |
+| `radius` | no | 30 | Maximum search radius in kilometres, 0.5–200 |
+| `directions` | no | 360 | Number of bearings sampled around the observer, 8–720 |
+| `steps` | no | 256 | Samples taken along each bearing out to `radius`, 8–2000 |
+| `observerHeight` | no | 1.7 | Height (metres) added to the observer's ground elevation, e.g. eye height |
+| `targetHeight` | no | 0 | Height (metres) added to every sampled target point, e.g. to ask "can I see the top of a 10m mast" |
+| `refraction` | no | true | Whether to apply the standard 7/6-Earth-radius correction for atmospheric refraction (pass `false` for pure geometric line of sight) |
 
-### How line-of-sight is calculated
+For each bearing, marches outward sampling elevation (bilinearly interpolated, same as the other endpoints) and tracks the point with the steepest line-of-sight angle seen so far — a point further out is only "visible" if its angle clears every closer point along that bearing, accounting for Earth's curvature. The single furthest visible point per bearing becomes one vertex of the returned shape. No-data samples (e.g. open sea beyond the loaded tiles) are treated as sea level rather than a gap, so looking out to sea still gives a sensible curvature-limited range. See [How line-of-sight is calculated](#how-line-of-sight-is-calculated) below for the underlying algorithm.
+
+Returns a GeoJSON `Feature` with a `Polygon` geometry — the boundary of furthest visibility in every direction:
+
+```json
+{ "type": "Feature", "properties": { "lon": -2.7036, "lat": 56.2208, "radiusKm": 30, ... },
+  "geometry": { "type": "Polygon", "coordinates": [[[lon, lat], ...]] } }
+```
+
+Note the shape can be sharply non-convex — a hillside 200m away can legitimately be the furthest visible point in one direction while an adjacent bearing looking down an open valley or coastline sees 20+ km, with no smooth transition between them.
+
+### Visibility (specific points)
+
+```
+GET /visibility?lon=<longitude>&lat=<latitude>&targets=<lon,lat[,altitude]|...>&observerHeight=<m>&targetHeight=<m>&refraction=<bool>&stepsPerKm=<n>
+POST /visibility   { "lon", "lat", "targets": [[lon, lat], [lon, lat, altitude], ...], "observerHeight", "targetHeight", "refraction", "stepsPerKm" }
+```
+
+The other side of the same line-of-sight test as `/viewshed`: instead of scanning outward to find the visibility boundary, checks specific target points against the observer.
+
+GET packs `targets` into the query string, which is fine for a handful of points but overflows the server's request-header limit (HTTP 431) somewhere in the low hundreds. POST takes the same data as a JSON body instead, with no such limit — use it for any non-trivial target list.
+
+| Parameter | Required | Default | Description |
+|-----------|----------|---------|-------------|
+| `lon` / `lat` | yes | — | Observer position |
+| `targets` | yes | — | `\|`-separated list of targets, each `lon,lat` or `lon,lat,altitude` |
+| `observerHeight` | no | 1.7 | Height (metres) added to the observer's ground elevation |
+| `targetHeight` | no | 0 | Height (metres) added to a target's ground elevation — only used for targets *without* an explicit altitude |
+| `refraction` | no | true | Same 7/6-Earth-radius correction as `/viewshed` |
+| `stepsPerKm` | no | 10 | Samples per kilometre along each observer→target path, 1–50 |
+
+A target given as `lon,lat` is assumed to sit at ground level — whatever that happens to be at that point — plus `targetHeight`. A target given as `lon,lat,altitude` is pinned to that absolute altitude instead (e.g. a drone at a known height), ignoring both the sampled terrain and `targetHeight` for that point.
+
+```json
+{ "lon": -2.7036, "lat": 56.2208, "observerHeight": 1.7, "targetHeight": 0, "refraction": true,
+  "results": [
+    { "lon": -2.9, "lat": 56.05, "distanceKm": 22.556, "visible": true, "groundElevation": 0, "altitude": 500 }
+  ] }
+```
+
+Because `/viewshed` and `/visibility` sample at different resolutions (a fixed step count over a fixed radius vs. a fixed density per path, since every target is a different distance away), they can disagree right at a visibility boundary — a point `/viewshed` reports as its furthest-visible in some direction might come back `visible: false` here at the default `stepsPerKm`, because the finer sampling along that specific path catches an intermediate obstruction the coarser radial scan stepped over. Raising `stepsPerKm` (or lowering `/viewshed`'s `steps`) narrows that gap; neither endpoint is "wrong", they're both discretized approximations of a continuous problem.
+
+## How line-of-sight is calculated
 
 `/viewshed` and `/visibility` are two views onto the same underlying test, implemented once in `lineOfSightAngle`/`lineOfSightAngleAtElevation` and reused by both routes. The core idea: walk outward from the observer along a bearing, and at each point compute the *elevation angle* from the observer to that point — the angle above (or below) the horizontal that you'd have to look. A point is visible only if nothing closer along that same line has a steeper (larger) angle, because anything steeper sticks up further into your view and blocks whatever's behind it.
 
@@ -247,72 +272,51 @@ the *furthest* point whose angle ever became the new running maximum.          o
  /       \       o observer                                                       /       \   o observer    own distance, then one angle check
 ```
 
-Because both are discretized (a finite number of bearings/steps, a finite sampling density along each path), they can disagree right at a visibility boundary — see the note at the end of the `/visibility` section below for why, and how to tighten it up.
+Because both are discretized (a finite number of bearings/steps, a finite sampling density along each path), they can disagree right at a visibility boundary — see the note at the end of the `/visibility` section above for why, and how to tighten it up.
 
-### Viewshed (line-of-sight horizon)
+## Contour cache
 
-```
-GET /viewshed?lon=<longitude>&lat=<latitude>&radius=<km>&directions=<n>&steps=<n>&observerHeight=<m>&targetHeight=<m>&refraction=<bool>
-```
+`/contours.svg` and `/contour-tiles/:z/:x/:y.svg` are backed by a disk cache at `cache/` (gitignored, created on first use). Each request's parameters are hashed into a cache key; a hit is served straight off disk, a miss is computed as normal and then written to the cache before responding. Node still needs to be running to serve requests (cache misses fall through to the normal compute path, and there's no separate static-serving tier), but once an area has been requested it's cheap to re-serve, and you can pre-warm the cache for a demo area by just requesting it ahead of time (e.g. with `curl`, or by panning the slippy map yourself) so sharing the demo doesn't trigger a slow first render for the next viewer.
 
-| Parameter | Required | Default | Description |
-|-----------|----------|---------|-------------|
-| `lon` | yes | — | Observer longitude in decimal degrees |
-| `lat` | yes | — | Observer latitude in decimal degrees |
-| `radius` | no | 30 | Maximum search radius in kilometres, 0.5–200 |
-| `directions` | no | 360 | Number of bearings sampled around the observer, 8–720 |
-| `steps` | no | 256 | Samples taken along each bearing out to `radius`, 8–2000 |
-| `observerHeight` | no | 1.7 | Height (metres) added to the observer's ground elevation, e.g. eye height |
-| `targetHeight` | no | 0 | Height (metres) added to every sampled target point, e.g. to ask "can I see the top of a 10m mast" |
-| `refraction` | no | true | Whether to apply the standard 7/6-Earth-radius correction for atmospheric refraction (pass `false` for pure geometric line of sight) |
+The cache key includes every parameter that affects the output (location/tile coordinates, resolution, interval, stroke width, size), so different query strings never collide.
 
-For each bearing, marches outward sampling elevation (bilinearly interpolated, same as the other endpoints) and tracks the point with the steepest line-of-sight angle seen so far — a point further out is only "visible" if its angle clears every closer point along that bearing, accounting for Earth's curvature. The single furthest visible point per bearing becomes one vertex of the returned shape. No-data samples (e.g. open sea beyond the loaded tiles) are treated as sea level rather than a gap, so looking out to sea still gives a sensible curvature-limited range.
+### Pre-warming the cache
 
-Returns a GeoJSON `Feature` with a `Polygon` geometry — the boundary of furthest visibility in every direction:
+`warm-cache.js` requests the same tile URLs `contours.html`'s slippy map would, for a range of zooms around a point, so they're already cached before you share the demo:
 
-```json
-{ "type": "Feature", "properties": { "lon": -2.7036, "lat": 56.2208, "radiusKm": 30, ... },
-  "geometry": { "type": "Polygon", "coordinates": [[[lon, lat], ...]] } }
+```bash
+node warm-cache.js                                              # defaults to Anstruther, zooms 12-17, radius 2 tiles
+node warm-cache.js --lat 56.2208 --lon -2.7036 --zooms 12-17 --radius 2
+node warm-cache.js --base-url http://localhost:3000 --concurrency 6
 ```
 
-Note the shape can be sharply non-convex — a hillside 200m away can legitimately be the furthest visible point in one direction while an adjacent bearing looking down an open valley or coastline sees 20+ km, with no smooth transition between them.
+It hits the running server over HTTP, so the server still needs to be up while warming. Once warmed, requests for that area come straight off disk regardless of who's asking.
 
-### Visibility (specific points)
+## Demos
 
-```
-GET /visibility?lon=<longitude>&lat=<latitude>&targets=<lon,lat[,altitude]|...>&observerHeight=<m>&targetHeight=<m>&refraction=<bool>&stepsPerKm=<n>
-POST /visibility   { "lon", "lat", "targets": [[lon, lat], [lon, lat, altitude], ...], "observerHeight", "targetHeight", "refraction", "stepsPerKm" }
-```
-
-The other side of the same line-of-sight test as `/viewshed` (both share the same `lineOfSightAngle`/`lineOfSightAngleAtElevation` code): instead of scanning outward to find the visibility boundary, checks specific target points against the observer.
-
-GET packs `targets` into the query string, which is fine for a handful of points but overflows the server's request-header limit (HTTP 431) somewhere in the low hundreds. POST takes the same data as a JSON body instead, with no such limit — use it for any non-trivial target list (the demo page's 500-point test uses POST).
-
-| Parameter | Required | Default | Description |
-|-----------|----------|---------|-------------|
-| `lon` / `lat` | yes | — | Observer position |
-| `targets` | yes | — | `\|`-separated list of targets, each `lon,lat` or `lon,lat,altitude` |
-| `observerHeight` | no | 1.7 | Height (metres) added to the observer's ground elevation |
-| `targetHeight` | no | 0 | Height (metres) added to a target's ground elevation — only used for targets *without* an explicit altitude |
-| `refraction` | no | true | Same 7/6-Earth-radius correction as `/viewshed` |
-| `stepsPerKm` | no | 10 | Samples per kilometre along each observer→target path, 1–50 |
-
-A target given as `lon,lat` is assumed to sit at ground level — whatever that happens to be at that point — plus `targetHeight`. A target given as `lon,lat,altitude` is pinned to that absolute altitude instead (e.g. a drone at a known height), ignoring both the sampled terrain and `targetHeight` for that point.
-
-```json
-{ "lon": -2.7036, "lat": 56.2208, "observerHeight": 1.7, "targetHeight": 0, "refraction": true,
-  "results": [
-    { "lon": -2.9, "lat": 56.05, "distanceKm": 22.556, "visible": true, "groundElevation": 0, "altitude": 500 }
-  ] }
-```
-
-Because `/viewshed` and `/visibility` sample at different resolutions (a fixed step count over a fixed radius vs. a fixed density per path, since every target is a different distance away), they can disagree right at a visibility boundary — a point `/viewshed` reports as its furthest-visible in some direction might come back `visible: false` here at the default `stepsPerKm`, because the finer sampling along that specific path catches an intermediate obstruction the coarser radial scan stepped over. Raising `stepsPerKm` (or lowering `/viewshed`'s `steps`) narrows that gap; neither endpoint is "wrong", they're both discretized approximations of a continuous problem.
-
-## Viewer
+### Isometric viewer
 
 Open `http://localhost:3000` in a browser to see an isometric bar-chart of the terrain. It defaults to `LON_DEFAULT`/`LAT_DEFAULT` in `p5js/sketch.js` — currently 55°N, 1.6°W — but shows nothing until you've placed the matching `.hgt` tile(s) for that location (or your chosen one) in `data/`. Each bar represents one SRTM sample (~90 m for SRTM3, ~30 m for SRTM1). Bar height is proportional to elevation above sea level; colour is fixed: blue at sea level, green above. Drag to pan.
 
-To change location or view radius edit `LON_DEFAULT`/`LAT_DEFAULT`/`RADIUS_KM` at the top of `p5js/sketch.js`, or pass `?lat=<lat>&lon=<lon>` in the URL. Internally it's built on the same `/tiles` and `/info` endpoints documented above.
+To change location or view radius edit `LON_DEFAULT`/`LAT_DEFAULT`/`RADIUS_KM` at the top of `p5js/sketch.js`, or pass `?lat=<lat>&lon=<lon>` in the URL. Internally it's built on the `/tiles` and `/info` endpoints.
+
+### Contours demo
+
+A pannable/zoomable demo page using `/contour-tiles` is available at `/contours.html` (`p5js/contours-sketch.js`) — a p5.js sketch, not Leaflet: it fetches each tile's SVG itself, decodes it into a `p5.Image` via a local blob URL (drawing straight from the server URL makes the browser fetch the same SVG twice), and draws tiles directly to the canvas with its own pan (drag) handling, following the same tile-coordinate math as the isometric viewer's `sketch.js`.
+
+Zooming is via the +/- buttons (bottom-right, `zoomIn()`/`zoomOut()`) only — scroll-wheel and trackpad pinch are deliberately disabled. A fast pinch gesture fires many wheel events in one frame, which both (a) is how a zoom-jump crash was triggered (see below) and (b) is exactly the kind of multi-step-at-once interaction the buttons rule out by construction — each click is its own single zoom step. `mouseWheel` still returns `false` so the gesture doesn't fall through to the browser's own page-scroll or native pinch-zoom. Button zooms centre on the view middle (there's no cursor position to anchor to from a click); a `zoomBy()`/`zoomIn()`/`zoomOut()` API is exposed globally if cursor-anchored wheel zoom is ever wanted back.
+
+It also exercises `/visibility`: on load (and on every "Go / Apply") it scatters the number of points given by "Test points" (default 500) randomly within "Test radius (km)" (default 10) of a fixed origin — marked with a yellow cross — asks `/visibility` whether each is visible from that origin, and plots them green (visible) or red (not). Both fields can also be set via URL params (`?points=20&testRadius=2`).
+
+Press **D** to flip between that random visibility cloud and the LoRa traceroute log at `p5js/data/log.csv` (gitignored — green for a `DIRECT` result, red otherwise, normalised into the same `visible` field so the colouring/export code doesn't need to know which dataset is active). Both datasets stay loaded at all times; `D` just changes which one `points` mirrors. The bottom-left info readout shows which is active and how many points it has.
+
+Deeper zooms need more tiles to cover the same screen area (e.g. 224 vs 56), so there's a brief window after zooming where the new zoom's tiles are still fetching. Rather than leaving that blank, `draw()` first draws the last zoom that *fully* loaded, scaled to fit the current view, underneath the current zoom's tiles — so zooming shows a blurry-but-present placeholder instead of a flash of grey.
+
+The actual tile *request* on each zoom step is debounced (150ms): rapidly clicking +/- repeatedly changes `zoomLevel` once per click, and requesting tiles on every single click would queue a full fetch+render batch per level passed through — leaving the zoom you actually land on stuck behind several already-irrelevant batches for several seconds. `zoomLevel`/`centerX`/`centerY` still update and redraw immediately on every click (so the placeholder below keeps the view responsive); only the network request waits for clicking to pause.
+
+Originally zoom was scroll-wheel/pinch driven, and a fast trackpad pinch gesture firing many wheel events in one frame (e.g. swinging `zoomLevel` 18 → 1 before `previousZoom` caught up) crashed the tab: the placeholder draw's scale factor is `2^(zoomLevel - previousZoom)`, and when that gap is large the implied tile size collapses toward zero, so `tilesAcross`/`tilesDown` (`ceil(viewportSize / tileSize)`) explodes into the hundreds of thousands — turning a nested loop that's normally a few dozen iterations into billions. Scroll/pinch are now disabled specifically so a gesture can't drive `zoomLevel` across many steps in a single frame, but the same jump is still reachable by rapidly clicking a zoom button many times before a redraw catches up, so the fix stayed in place rather than being removed: `tileRangeForZoom` caps the tile count at `MAX_PLACEHOLDER_TILES` (64) as a hard backstop, and `draw()` skips the placeholder pass entirely once the gap exceeds 6 levels.
+
+Its "Export SVG" button merges every tile currently on screen into a single flat SVG — reusing each tile's already-fetched markup, stripped of its outer `<svg>` wrapper and re-placed in a `<g transform="translate(...)">` at the screen position it was drawn at — plus the visible points, and downloads it as one seamless vector file (not a screenshot).
 
 ## Data license
 
