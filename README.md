@@ -25,7 +25,7 @@ This service uses **NASA Shuttle Radar Topography Mission Global 1 arc second V0
 
 - Dataset: https://doi.org/10.5067/MEASURES/SRTM/SRTMGL1.003
 
-Files should follow the standard naming convention (e.g. `N51W001.hgt`) and be placed in a `data/` directory at the project root. Only tiles covering the area(s) you want to view/query are needed — the server just skips locations it has no matching tile for (see `/info` below to check what's currently loaded).
+Files should follow the standard naming convention (e.g. `N51W001.hgt`) and be placed in the `data/` directory at the project root — it's included in the repo (empty) precisely so you have somewhere to drop tiles into. Only tiles covering the area(s) you want to view/query are needed — the server just skips locations it has no matching tile for (see `/info` below to check what's currently loaded).
 
 #### Data license
 
