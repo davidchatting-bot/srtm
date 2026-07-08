@@ -169,7 +169,7 @@ The raw-data counterpart to `/terrain`: instead of a rendered image, returns a J
 
 ### Line-of-sight
 
-Both endpoints below are two views onto the same line-of-sight test, sharing one implementation (`lineOfSightAngle`/`lineOfSightAngleAtElevation`) — see [How line-of-sight is calculated](#how-line-of-sight-is-calculated) below for the underlying algorithm. `/viewshed` scans outward from the observer to find the visibility boundary in every direction; `/visibility` instead checks specific target points against the observer. Both return JSON.
+Both endpoints below are two views onto the same line-of-sight test, sharing one implementation (`lineOfSightAngle`/`lineOfSightAngleAtElevation`): `/viewshed` scans outward from the observer to find the visibility boundary in every direction; `/visibility` instead checks specific target points against the observer. Both return JSON.
 
 #### Viewshed (line-of-sight horizon)
 
@@ -228,61 +228,6 @@ A target given as `lon,lat` is assumed to sit at ground level — whatever that 
 
 Because `/viewshed` and `/visibility` sample at different resolutions (a fixed step count over a fixed radius vs. a fixed density per path, since every target is a different distance away), they can disagree right at a visibility boundary — a point `/viewshed` reports as its furthest-visible in some direction might come back `visible: false` here at the default `stepsPerKm`, because the finer sampling along that specific path catches an intermediate obstruction the coarser radial scan stepped over. Raising `stepsPerKm` (or lowering `/viewshed`'s `steps`) narrows that gap; neither endpoint is "wrong", they're both discretized approximations of a continuous problem.
 
-## How line-of-sight is calculated
-
-`/viewshed` and `/visibility` are two views onto the same underlying test, implemented once in `lineOfSightAngle`/`lineOfSightAngleAtElevation` and reused by both routes. The core idea: walk outward from the observer along a bearing, and at each point compute the *elevation angle* from the observer to that point — the angle above (or below) the horizontal that you'd have to look. A point is visible only if nothing closer along that same line has a steeper (larger) angle, because anything steeper sticks up further into your view and blocks whatever's behind it.
-
-```
-elevation
-   ^
-   |                                            *  T2 — visible: its angle is
-   |                                       *        *steeper* than the hill's,
-   |                                  *            so the line to T2 clears it
-   |                             *  <- line of sight, observer to T2
-   |                        *
-   |                   *
-   |              *
-   |         *  <- line of sight, observer to the hilltop
-   |    .--^--.
-   |   /  hill \                                  x  T1 — NOT visible: its
-   |  /         \                            - - -    angle is *shallower*
-   | o  observer  \                     - - -          than the hill's, so
-   | (ground + eye  \               - -                the hill blocks it
-   |  height)         \         - -
-   +--------------------+---------+----------------------------------> distance
-                       hill        T1                  T2
-```
-
-Each point's apparent height isn't just its raw elevation, though — Earth curves away beneath a straight line of sight, so a point far enough away is effectively lower than its elevation alone would suggest. `curvatureDropM` subtracts that drop (scaled up by 7/6 by default, the standard approximation for atmospheric refraction bending the ray slightly back toward the surface) before the angle is computed:
-
-```
-   o ─────────────────────────────────────────────  •   straight chord — what
-    \                                            ,·'      the distance/height
-     \                                       ,·'           numbers alone imply
-      \                                  ,·'
-       \                             ,·'    ╲  actual line of sight: bends
-        \                        ,·'          ╲ down to follow the curve, so
-         \___________________,·'                a point right at the chord's
-              observer                            height reads as *lower* —
-                                                    drop = d² / (2 · R_eff)
-```
-
-`/viewshed` (scan outward, find the boundary) and `/visibility` (check specific points) both run this same sweep — they just ask a different question of it:
-
-```
-/viewshed: for one bearing, keep marching out to `radius`, remembering          /visibility: for one target, march the points strictly between
-the *furthest* point whose angle ever became the new running maximum.          observer and target (same running-max sweep), then check whether
-                                                                                 the target's own angle clears that maximum.
-
-        *                                                                              x  target (checked once, at its exact distance)
-       /  <- furthest point that set a new max angle becomes a ring vertex             ↑
-      *                                                                                | line of sight from observer
-  .--^--.        ↑ scanning outward, bearing fixed, distance increasing            .--^--.    ↑ same sweep, but only out to the target's
- /       \       o observer                                                       /       \   o observer    own distance, then one angle check
-```
-
-Because both are discretized (a finite number of bearings/steps, a finite sampling density along each path), they can disagree right at a visibility boundary — see the note at the end of the `/visibility` section above for why, and how to tighten it up.
-
 ## Contour cache
 
 `/contours.svg` and `/contour-tiles/:z/:x/:y.svg` are backed by a disk cache at `cache/` (gitignored, created on first use). Each request's parameters are hashed into a cache key; a hit is served straight off disk, a miss is computed as normal and then written to the cache before responding. Node still needs to be running to serve requests (cache misses fall through to the normal compute path, and there's no separate static-serving tier), but once an area has been requested it's cheap to re-serve, and you can pre-warm the cache for a demo area by just requesting it ahead of time (e.g. with `curl`, or by panning the slippy map yourself) so sharing the demo doesn't trigger a slow first render for the next viewer.
@@ -300,32 +245,6 @@ node warm-cache.js --base-url http://localhost:3000 --concurrency 6
 ```
 
 It hits the running server over HTTP, so the server still needs to be up while warming. Once warmed, requests for that area come straight off disk regardless of who's asking.
-
-## Demos
-
-### Isometric viewer
-
-Open `http://localhost:3000` in a browser to see an isometric bar-chart of the terrain. It defaults to `LON_DEFAULT`/`LAT_DEFAULT` in `p5js/sketch.js` — currently 55°N, 1.6°W — but shows nothing until you've placed the matching `.hgt` tile(s) for that location (or your chosen one) in `data/`. Each bar represents one SRTM sample (~90 m for SRTM3, ~30 m for SRTM1). Bar height is proportional to elevation above sea level; colour is fixed: blue at sea level, green above. Drag to pan.
-
-To change location or view radius edit `LON_DEFAULT`/`LAT_DEFAULT`/`RADIUS_KM` at the top of `p5js/sketch.js`, or pass `?lat=<lat>&lon=<lon>` in the URL. Internally it's built on the `/tiles` and `/info` endpoints.
-
-### Contours demo
-
-A pannable/zoomable demo page using `/contour-tiles` is available at `/contours.html` (`p5js/contours-sketch.js`) — a p5.js sketch, not Leaflet: it fetches each tile's SVG itself, decodes it into a `p5.Image` via a local blob URL (drawing straight from the server URL makes the browser fetch the same SVG twice), and draws tiles directly to the canvas with its own pan (drag) handling, following the same tile-coordinate math as the isometric viewer's `sketch.js`.
-
-Zooming is via the +/- buttons (bottom-right, `zoomIn()`/`zoomOut()`) only — scroll-wheel and trackpad pinch are deliberately disabled. A fast pinch gesture fires many wheel events in one frame, which both (a) is how a zoom-jump crash was triggered (see below) and (b) is exactly the kind of multi-step-at-once interaction the buttons rule out by construction — each click is its own single zoom step. `mouseWheel` still returns `false` so the gesture doesn't fall through to the browser's own page-scroll or native pinch-zoom. Button zooms centre on the view middle (there's no cursor position to anchor to from a click); a `zoomBy()`/`zoomIn()`/`zoomOut()` API is exposed globally if cursor-anchored wheel zoom is ever wanted back.
-
-It also exercises `/visibility`: on load (and on every "Go / Apply") it scatters the number of points given by "Test points" (default 500) randomly within "Test radius (km)" (default 10) of a fixed origin — marked with a yellow cross — asks `/visibility` whether each is visible from that origin, and plots them green (visible) or red (not). Both fields can also be set via URL params (`?points=20&testRadius=2`).
-
-Press **D** to flip between that random visibility cloud and the LoRa traceroute log at `p5js/data/log.csv` (gitignored — green for a `DIRECT` result, red otherwise, normalised into the same `visible` field so the colouring/export code doesn't need to know which dataset is active). Both datasets stay loaded at all times; `D` just changes which one `points` mirrors. The bottom-left info readout shows which is active and how many points it has.
-
-Deeper zooms need more tiles to cover the same screen area (e.g. 224 vs 56), so there's a brief window after zooming where the new zoom's tiles are still fetching. Rather than leaving that blank, `draw()` first draws the last zoom that *fully* loaded, scaled to fit the current view, underneath the current zoom's tiles — so zooming shows a blurry-but-present placeholder instead of a flash of grey.
-
-The actual tile *request* on each zoom step is debounced (150ms): rapidly clicking +/- repeatedly changes `zoomLevel` once per click, and requesting tiles on every single click would queue a full fetch+render batch per level passed through — leaving the zoom you actually land on stuck behind several already-irrelevant batches for several seconds. `zoomLevel`/`centerX`/`centerY` still update and redraw immediately on every click (so the placeholder below keeps the view responsive); only the network request waits for clicking to pause.
-
-Originally zoom was scroll-wheel/pinch driven, and a fast trackpad pinch gesture firing many wheel events in one frame (e.g. swinging `zoomLevel` 18 → 1 before `previousZoom` caught up) crashed the tab: the placeholder draw's scale factor is `2^(zoomLevel - previousZoom)`, and when that gap is large the implied tile size collapses toward zero, so `tilesAcross`/`tilesDown` (`ceil(viewportSize / tileSize)`) explodes into the hundreds of thousands — turning a nested loop that's normally a few dozen iterations into billions. Scroll/pinch are now disabled specifically so a gesture can't drive `zoomLevel` across many steps in a single frame, but the same jump is still reachable by rapidly clicking a zoom button many times before a redraw catches up, so the fix stayed in place rather than being removed: `tileRangeForZoom` caps the tile count at `MAX_PLACEHOLDER_TILES` (64) as a hard backstop, and `draw()` skips the placeholder pass entirely once the gap exceeds 6 levels.
-
-Its "Export SVG" button merges every tile currently on screen into a single flat SVG — reusing each tile's already-fetched markup, stripped of its outer `<svg>` wrapper and re-placed in a `<g transform="translate(...)">` at the screen position it was drawn at — plus the visible points, and downloads it as one seamless vector file (not a screenshot).
 
 ## Data license
 
