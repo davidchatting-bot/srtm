@@ -47,6 +47,22 @@ sudo systemctl enable --now srtm
 
 ## Endpoints
 
+### Data info
+
+```
+GET /info
+```
+
+Returns JSON describing each loaded SRTM tile:
+
+```json
+{ "files": [
+  { "name": "N37W123.hgt", "pixelDeg": 0.000833, "region": { "minLon": -123, "maxLon": -122, "minLat": 37, "maxLat": 38 } }
+] }
+```
+
+Each entry in `files` is one loaded `.hgt` tile: `pixelDeg` is its native sample spacing in degrees (1/1200 for SRTM3, 1/3600 for SRTM1), and `region` is the 1°×1° bounding box (decimal degrees) it covers, parsed from its filename. Both are per-file rather than assumed uniform, since a `data/` directory could in principle mix SRTM1 and SRTM3 tiles.
+
 ### PNG
 
 Both endpoints below return elevation encoded the same way: 16-bit precision packed across the R and G channels (`R << 8 | G`) over a fixed range of −500 m to 8500 m — this is not a greyscale image, R and G individually look like arbitrary noise. Decode with `(v16 / 65535) * 9000 − 500`. Areas with no data are transparent. Because the encoding and range are identical, a `/terrain` image and a `/tiles` mosaic of the same area are pixel-for-pixel interchangeable.
@@ -130,25 +146,7 @@ Standard XYZ contour tiles, greyscale-encoded the same way as `/contours.svg`, w
 L.tileLayer('http://localhost:3000/contour-tiles/{z}/{x}/{y}.svg').addTo(map);
 ```
 
-### JSON
-
-#### Data info
-
-```
-GET /info
-```
-
-Returns JSON describing each loaded SRTM tile:
-
-```json
-{ "files": [
-  { "name": "N37W123.hgt", "pixelDeg": 0.000833, "region": { "minLon": -123, "maxLon": -122, "minLat": 37, "maxLat": 38 } }
-] }
-```
-
-Each entry in `files` is one loaded `.hgt` tile: `pixelDeg` is its native sample spacing in degrees (1/1200 for SRTM3, 1/3600 for SRTM1), and `region` is the 1°×1° bounding box (decimal degrees) it covers, parsed from its filename. Both are per-file rather than assumed uniform, since a `data/` directory could in principle mix SRTM1 and SRTM3 tiles.
-
-#### Bounding-box terrain data
+### Bounding-box terrain data
 
 ```
 GET /heightmap?lon=<longitude>&lat=<latitude>&radius=<km>&samples=<n>
