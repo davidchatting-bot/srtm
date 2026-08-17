@@ -465,10 +465,39 @@ function simplifyChain(points, closed, tolerance) {
   return simplified;
 }
 
+// Below this on-screen span (px), a chain that simplifies down to just its
+// two endpoints isn't a legible contour line - "M a L b" (or "...Z" if
+// chainSegments happened to mark it closed) draws one bare straight
+// stroke, no smoothing to soften it, typically from noise in the source
+// DEM at the sampled resolution. Checked *after* simplifyChain rather than
+// on the raw point count: Douglas-Peucker can collapse a longer but
+// still-tiny, nearly-straight run down to 2 points, so checking the raw
+// chain first would miss those. A real small feature (a tiny hilltop, a
+// shallow depression) has actual curvature, not just noise along a line,
+// so simplification leaves it with more than 2 points and it stays
+// legitimate regardless of its physical size.
+//
+// Excludes chains touching the sampled grid's edge: those are genuinely
+// short because marching squares had no neighbouring cell to continue
+// into, not because the underlying contour is actually that short - the
+// real line carries on past the edge of what was requested.
+const MIN_CHAIN_PX = 15;
+const GRID_EDGE_MARGIN = 1.5;
+
+function nearGridEdge(p, gridSize) {
+  return p.x < GRID_EDGE_MARGIN || p.x > gridSize - 1 - GRID_EDGE_MARGIN ||
+         p.y < GRID_EDGE_MARGIN || p.y > gridSize - 1 - GRID_EDGE_MARGIN;
+}
+
 // Render a chained contour as a single smoothed path.
-function smoothPathD(points, closed, scale) {
+function smoothPathD(points, closed, scale, gridSize) {
   if (points.length < 2) return null;
   const simplified = simplifyChain(points, closed, 1.2);
+  if (simplified.length === 2 && !nearGridEdge(simplified[0], gridSize) && !nearGridEdge(simplified[1], gridSize)) {
+    const dx = (simplified[1].x - simplified[0].x) * scale;
+    const dy = (simplified[1].y - simplified[0].y) * scale;
+    if (Math.hypot(dx, dy) < MIN_CHAIN_PX) return null;
+  }
   const smoothed = simplified.length > 2 ? chaikinSmooth(simplified, closed, 4) : simplified;
   const pts = smoothed.map(p => ({ x: p.x * scale, y: p.y * scale }));
   const fmt = p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`;
@@ -560,7 +589,7 @@ app.get("/contours.svg", (req, res) => {
       const segments = marchingSquares(grid, samples, samples, level);
       if (segments.length === 0) continue;
       for (const chain of chainSegments(segments)) {
-        const d = smoothPathD(chain.points, chain.closed, scale);
+        const d = smoothPathD(chain.points, chain.closed, scale, samples);
         if (d) body += `<path d="${d}"/>`;
       }
     }
@@ -650,7 +679,7 @@ app.get("/contour-tiles/:z/:x/:y.svg", (req, res) => {
       const segments = marchingSquares(grid, samples, samples, level);
       if (segments.length === 0) continue;
       for (const chain of chainSegments(segments)) {
-        const d = smoothPathD(chain.points, chain.closed, scale);
+        const d = smoothPathD(chain.points, chain.closed, scale, samples);
         if (d) body += `<path d="${d}"/>`;
       }
     }
