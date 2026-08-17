@@ -3,7 +3,7 @@
 A Node.js/Express service for querying and visualising NASA SRTM terrain elevation data — slippy-map elevation tiles, bounding-box terrain images and raw elevation grids, contour maps (as SVG or tiles), and line-of-sight viewshed/visibility analysis — plus two p5.js demo viewers: an isometric 3-D bar chart and a pannable contour map.
 
 ![Contour map of the Tyne estuary between Newcastle and Tynemouth](docs/contours-hero.jpg)
-*Rendered by `/contours.svg` — real elevation data, not a mockup.*
+*The Tyne estuary, Newcastle to Tynemouth — rendered by `/contours.svg` from real elevation data.*
 
 ## Setup
 
