@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SRTM Contour Viewer</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      background: #808080;
+      font-family: monospace;
+      color: #fff;
+    }
+
+    #map {
+      width: 100%;
+      height: 100%;
+      background: #808080;
+      cursor: grab;
+    }
+
+    #map:active {
+      cursor: grabbing;
+    }
+
+    #map canvas {
+      display: block;
+    }
+
+    #panel {
+      position: fixed;
+      top: 12px;
+      left: 12px;
+      z-index: 1000;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      background: rgba(0, 0, 0, 0.7);
+      border: 1px solid #444;
+      border-radius: 4px;
+      padding: 10px;
+      font-size: 12px;
+    }
+
+    #panel label {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+
+    #panel input {
+      background: rgba(0, 0, 0, 0.7);
+      border: 1px solid #444;
+      color: #fff;
+      font-family: monospace;
+      font-size: 12px;
+      padding: 4px 6px;
+      border-radius: 4px;
+      width: 110px;
+    }
+
+    #panel button {
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid #444;
+      color: #fff;
+      font-family: monospace;
+      font-size: 12px;
+      padding: 6px 8px;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+
+    #panel button:hover {
+      background: rgba(255, 255, 255, 0.2);
+    }
+
+    #export-status {
+      font-size: 11px;
+      color: #999;
+    }
+
+    #info {
+      position: fixed;
+      bottom: 12px;
+      left: 12px;
+      color: #fff;
+      font-size: 12px;
+      background: rgba(0, 0, 0, 0.5);
+      padding: 6px 10px;
+      border-radius: 4px;
+      pointer-events: none;
+    }
+
+    #zoom-control {
+      position: fixed;
+      bottom: 12px;
+      right: 12px;
+      z-index: 1000;
+      display: flex;
+      flex-direction: column;
+    }
+
+    #zoom-control button {
+      width: 36px;
+      height: 36px;
+      font-size: 18px;
+      line-height: 1;
+      background: rgba(0, 0, 0, 0.7);
+      border: 1px solid #444;
+      color: #fff;
+      cursor: pointer;
+    }
+
+    #zoom-control button:first-child {
+      border-radius: 4px 4px 0 0;
+      border-bottom: none;
+    }
+
+    #zoom-control button:last-child {
+      border-radius: 0 0 4px 4px;
+    }
+
+    #zoom-control button:hover {
+      background: rgba(255, 255, 255, 0.2);
+    }
+  </style>
+</head>
+<body>
+  <main id="map"></main>
+  <div id="info"></div>
+  <div id="zoom-control">
+    <button type="button" onclick="zoomIn()" aria-label="Zoom in">+</button>
+    <button type="button" onclick="zoomOut()" aria-label="Zoom out">&minus;</button>
+  </div>
+  <form id="panel" onsubmit="goToLocation(event)">
+    <label>Latitude
+      <input id="lat-input" type="number" step="any" value="56.2483517" required>
+    </label>
+    <label>Longitude
+      <input id="lon-input" type="number" step="any" value="-2.7796033" required>
+    </label>
+    <label>Interval (m, blank = auto)
+      <input id="interval-input" type="number" step="any" placeholder="auto">
+    </label>
+    <label>Resolution (samples/tile)
+      <input id="resolution-input" type="number" step="1" value="128" min="8" max="256">
+    </label>
+    <label>Test points
+      <input id="test-points-input" type="number" step="1" value="500" min="1" max="5000">
+    </label>
+    <label>Test radius (km)
+      <input id="test-radius-input" type="number" step="any" value="10" min="0.1" max="200">
+    </label>
+    <button type="submit">Go / Apply</button>
+    <button type="button" id="export-button" onclick="exportSVG()">Export SVG</button>
+    <span id="export-status"></span>
+  </form>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.4/p5.min.js"></script>
+  <script src="contours-sketch.js"></script>
+</body>
+</html>

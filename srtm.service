@@ -1,0 +1,12 @@
+[Unit]
+Description=SRTM Terrain Tile Server
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/node /home/dave/srtm/script.js
+WorkingDirectory=/home/dave/srtm
+Restart=on-failure
+User=dave
+
+[Install]
+WantedBy=multi-user.target

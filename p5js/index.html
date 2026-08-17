@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SRTM Elevation Viewer</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main id="map"></main>
+  <div id="info">
+    <span id="coords"></span>
+    <span id="zoom-level"></span>
+  </div>
+  <form id="location-form" onsubmit="goToLocation(event)">
+    <input id="lat-input" type="number" step="any" placeholder="Latitude" required>
+    <input id="lon-input" type="number" step="any" placeholder="Longitude" required>
+    <button type="submit">Go</button>
+  </form>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.4/p5.min.js"></script>
+  <script src="sketch.js"></script>
+</body>
+</html>
