@@ -238,7 +238,7 @@ Both modes plot the same quantity — elevation relative to the observer's eye l
 *`/skyline.svg?lon=-1.5&lat=55.0&radius=5` — every other parameter at default (`directions=360`, `furthest=false`, `heightScale=1`). As flat as `/line.svg`'s true-scale profile above, for the same reason: real terrain barely registers at 1px-per-metre proportions.*
 
 ![Furthest-visible skyline around a 15km circle centred on the Tyne estuary, exaggerated](docs/skyline-furthest-example.svg)
-*`/skyline.svg?lon=-1.5&lat=55.0&radius=15&furthest=true&heightScale=10` — the actual visible horizon in every direction from the estuary, out to 15km, with `heightScale` raised to 10 to make it visible at all (same true-scale flatness problem as above, otherwise).*
+*`/skyline.svg?lon=-1.5&lat=55.0&radius=15&furthest=true&heightScale=5` — the actual visible horizon in every direction from the estuary, out to 15km, with `heightScale` raised to 5 to make it visible at all (same true-scale flatness problem as above, otherwise).*
 
 ### Line-of-sight
 
