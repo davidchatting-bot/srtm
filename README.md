@@ -10,8 +10,8 @@ A Node.js/Express service for querying and visualising NASA SRTM terrain elevati
 ### 1. Clone the repo
 
 ```bash
-git clone https://github.com/davidchatting/srtm.git
-cd srtm
+git clone https://github.com/davidchatting/reliefd.git
+cd reliefd
 ```
 
 ### 2. Install dependencies
