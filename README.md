@@ -231,10 +231,13 @@ GET /skyline.svg?lon=<longitude>&lat=<latitude>&lon2=<longitude>&lat2=<latitude>
 
 The x-axis is bearing (0–360°) rather than distance, so the plotted line's value at the left edge always exactly matches its value at the right edge — both are bearing 0 — meaning the line joins seamlessly if tiled side by side or wrapped into a loop. There's no natural horizontal distance scale here either, since the x-axis is angular rather than metric, so the vertical scale instead borrows the px-per-metre a `/line.svg` path of length `radius` would use, purely so `heightScale=1` still means true-to-life proportions.
 
-*(A `furthest=false` mode — sampling the ground literally at `radius` regardless of what's in between, rather than searching for what's actually visible — is still being worked out and isn't exposed yet.)*
+![Skyline around a 15km circle centred on the Tyne estuary, exaggerated](docs/skyline-example.svg)
+*`/skyline.svg?lon=-1.5&lat=55.0&radius=15&heightScale=5` — the visible horizon in every direction from the estuary, out to 15km, with `heightScale` raised to 5 to make it visible at all (same true-scale flatness problem as above, otherwise).*
 
-![Furthest-visible skyline around a 15km circle centred on the Tyne estuary, exaggerated](docs/skyline-furthest-example.svg)
-*`/skyline.svg?lon=-1.5&lat=55.0&radius=15&furthest=true&heightScale=5` — the actual visible horizon in every direction from the estuary, out to 15km, with `heightScale` raised to 5 to make it visible at all (same true-scale flatness problem as above, otherwise).*
+The same data, bent around a ring instead of unrolled into a strip, and tilted into true isometric view (30° ground-line angle) — north at the top, the line starts there (marked) and runs clockwise. This isn't a server endpoint, just `p5js/skyline.js` re-projecting `/skyline.svg`'s own rendered output; see [`p5js/README.md`](p5js/README.md#skyline-viewer) for how, and `p5js/skyline.html` for the live version (retype coordinates to re-centre; no drag-to-pan like the other two viewers).
+
+![The same skyline data, wrapped around a ring in isometric view, north at the top](docs/skyline-isometric-example.svg)
+*`p5js/skyline.html?lon=-1.5&lat=55.0&radius=15` — dashed ring is eye level; the solid line dips below it where the ground falls away (e.g. due east, across the estuary) and rises above it into the hills to the south-west.*
 
 ### Line-of-sight
 
