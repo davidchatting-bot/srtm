@@ -1,14 +1,16 @@
 # p5js — Isometric Terrain Viewer
 
-A browser-based isometric bar-chart viewer for the SRTM tile server. Served automatically at `http://localhost:3000` when the parent server is running.
+Browser-based viewers for the SRTM tile server, served automatically at `http://localhost:3000` when the parent server is running. Two of the three (`index.html`, `contours.html`) are p5.js sketches; `skyline.html` isn't — it just fetches and re-projects real SVG output, no canvas library needed.
 
 ## Files
 
 | File | Purpose |
 |------|---------|
-| `index.html` | Page shell — mounts the p5.js canvas and a coordinate overlay |
-| `style.css` | Full-screen canvas, grab cursor, fixed info overlay |
-| `sketch.js` | All rendering logic |
+| `index.html` | Isometric bar-chart page shell — mounts the p5.js canvas and a coordinate overlay |
+| `style.css` | Full-screen canvas, grab cursor, fixed info overlay (for `index.html`) |
+| `sketch.js` | Isometric bar-chart rendering logic |
+| `contours.html` / `contours-sketch.js` | Pannable contour-map viewer |
+| `skyline.html` / `skyline.js` | Isometric skyline viewer — see below |
 
 ## How it works
 
@@ -41,3 +43,22 @@ Most tunable values are constants at the top of `sketch.js`:
 |--------|--------|
 | Drag | Pan the view |
 | Window resize | Canvas and layout recalculate automatically |
+
+## Skyline viewer
+
+`skyline.html` renders `/skyline.svg`'s visible-horizon data as a ring in isometric view instead of an unrolled strip — same idea as the README's "Skyline profile" section, just wrapped around a circle.
+
+Since `/skyline.svg` only returns rendered SVG, not raw JSON, `skyline.js` recovers the real bearing/height samples by parsing its own output back out (`width` and the `<polyline points="...">` attribute), the same "decode the server's own rendered output" approach `sketch.js` already uses for elevation tiles — just on an SVG string instead of PNG pixels. It then re-projects those samples itself:
+
+- **Isometric angle**: true isometric (30° ground-line angle: `KX = cos(30°)`, `KY = sin(30°)`), not the flatter 2:1 dimetric ratio common in pixel-art isometric tiles.
+- **North at the top**: an isometric projection skews a true ground-plane circle into a rotated ellipse, so bearing 0 only lands at the ellipse's screen-top vertex after a −45° ground-angle offset is applied first (see `groundPoint()`). The rendered line always starts there and runs clockwise (N→E→S→W), marked with a small dot.
+- **Vertical scale**: `PX_PER_M = 0.5`, a legibility pick rather than a geographic one — unlike `/line.svg`, there's no real horizontal distance axis here to tie a "true scale" to, since the x-axis is bearing, not distance.
+
+| Constant | Default | Description |
+|----------|---------|-------------|
+| `LON_DEFAULT` / `LAT_DEFAULT` | −1.6 / 55.0 | Centre point, overridable via `?lon=`/`?lat=` in the URL |
+| `RADIUS_KM_DEFAULT` | 15 | Search radius in kilometres, overridable via `?radius=` |
+| `DIRECTIONS_DEFAULT` | 360 | Bearings sampled, overridable via `?directions=` |
+| `PX_PER_M` | 0.5 | Vertical scale (see above) |
+
+The form (top-left) re-fetches and re-renders on submit; the info bar (bottom-left) shows centre, radius, and bearing count — no elevation-range readout, since that would mean scanning every sample on every load just to display a number nothing else here depends on.
