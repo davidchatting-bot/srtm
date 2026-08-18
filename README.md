@@ -1,4 +1,4 @@
-# srtm
+# reliefd
 
 A Node.js/Express service for querying and visualising NASA SRTM terrain elevation data — slippy-map elevation tiles, bounding-box terrain images and raw elevation grids, contour maps (as SVG or tiles), and line-of-sight viewshed/visibility analysis — plus two p5.js demo viewers: an isometric 3-D bar chart and a pannable contour map.
 
@@ -43,9 +43,9 @@ The server runs on port 3000.
 A systemd unit file is included. Install it with:
 
 ```bash
-sudo cp srtm.service /etc/systemd/system/
+sudo cp reliefd.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now srtm
+sudo systemctl enable --now reliefd
 ```
 
 ## Endpoints
@@ -82,6 +82,9 @@ Standard XYZ tiles compatible with Leaflet, OpenLayers, Mapbox GL, etc.:
 L.tileLayer('http://localhost:3000/tiles/{z}/{x}/{y}.png').addTo(map);
 ```
 
+![Slippy tile z=12 x=2030 y=1295, the Tyne estuary at default settings](docs/tiles-example.png)
+*`/tiles/12/2030/1295.png` — the same Tyne estuary as the hero image, at default settings (`raw=false`). Coastal elevation here sits near 0m, which under the fixed −500–8500m range renders very dark (pixel values 14–17 of 255) — see `/contours.svg` below for the same spot with detail visible via line art instead of shading.*
+
 #### Bounding-box terrain image
 
 ```
@@ -97,6 +100,9 @@ GET /terrain?lon=<longitude>&lat=<latitude>&radius=<km>&resolution=<n>&raw=<bool
 | `raw` | no | false | 16-bit R/G data encoding instead of the default greyscale — see above |
 
 Returns a PNG centred on the given point.
+
+![Terrain image centred on the Tyne estuary, radius 5km, default settings](docs/terrain-example.png)
+*`/terrain?lon=-1.5&lat=55.0&radius=5` — `/terrain` has no default radius, so 5km (matching `/contours.svg`'s own default) is used here; `resolution` and `raw` are left at default. Same near-black result as `/tiles` above, for the same reason: coastal terrain near sea level under the fixed range.*
 
 ### SVG
 
@@ -118,6 +124,9 @@ GET /contours.svg?lon=<longitude>&lat=<latitude>&radius=<km>&resolution=<n>&inte
 | `size` | no | 800 | Output SVG width/height in pixels |
 
 Returns an SVG image with one contour line per elevation level.
+
+![Contour map of the Tyne estuary at default radius and resolution](docs/contours-example.svg)
+*`/contours.svg?lon=-1.5&lat=55.0` — every other parameter at default (`radius=5`, `resolution=100`, `interval=auto`, `size=800`): a smaller, plainer view of the same estuary as the hero image above, which used `radius=12` and `resolution=400` for a more detailed render.*
 
 #### Contour slippy tiles
 
@@ -150,6 +159,9 @@ Standard XYZ contour tiles, black lines on a transparent background — usable a
 L.tileLayer('http://localhost:3000/contour-tiles/{z}/{x}/{y}.svg').addTo(map);
 ```
 
+![Contour tile z=12 x=2030 y=1295, the same Tyne estuary tile at default settings](docs/contour-tiles-example.svg)
+*`/contour-tiles/12/2030/1295.svg` — the same tile as `/tiles` above, contoured at default settings (`resolution=128`, `interval=20m`, the zoom≤12 default from the table above).*
+
 ### Bounding-box terrain data
 
 ```
@@ -166,8 +178,10 @@ GET /heightmap?lon=<longitude>&lat=<latitude>&radius=<km>&samples=<n>
 The raw-data counterpart to `/terrain`: instead of a rendered image, returns a JSON grid of bilinearly-interpolated elevation values in metres, row-major from the north-west corner:
 
 ```json
-{ "samples": 64, "data": [123.4, 125.1, ...] }
+{ "samples": 64, "data": [53.78, 53.78, 54.36, 55.21, 55.68, 55.92, ...] }
 ```
+
+Real output from `/heightmap?lon=-1.5&lat=55.0` (defaults: `radius=1`, `samples=64`) — the first row of 64×64 elevation values, in metres, starting at the estuary's north-west corner.
 
 ### Terrain profile
 
@@ -189,6 +203,42 @@ Returns an SVG line chart of elevation along the great-circle path from the star
 `heightScale` exaggerates real terrain relief only — it never touches the horizontal (distance) scale, nor sea level's curved position, only how many pixels a metre of *elevation above sea level* maps to, e.g. `heightScale=100` draws every metre of relief 100x taller than true scale while the curvature stays geometrically accurate. This is useful for making subtle terrain visible without the tiny proportions true scale would otherwise give it, and without exaggerating (and so misrepresenting) the curvature itself; since the artboard auto-crops to fit, there's no need to separately raise a canvas size to match.
 
 When `curved` is enabled, each sample has the exact sagitta added — the height an arc rises above its chord, zero at both endpoints and maximum at the midpoint. A chord between two points on a sphere lies inside it, so the true surface between them actually rises above a straight line drawn between them by this amount (the same effect that limits radio/visual line-of-sight over distance); `curved=false` plots the raw elevations instead, ignoring Earth's shape entirely.
+
+![Terrain profile from the Tyne estuary to a nearby hill, barely visible at true scale](docs/line-example.svg)
+*`/line.svg?lon1=-1.5&lat1=55.0&lon2=-1.735&lat2=54.884` — from the estuary to the highest point (≈247m) found within 15km of it, so about as dramatic a profile as this area offers. Every other parameter is at default, including `heightScale=1` (true scale) — and at true scale it's still only 11px tall in an 800px-wide image. Real terrain is far flatter in profile than it looks on a map; that's exactly why `heightScale` exists (try `heightScale=20`).*
+
+### Skyline profile
+
+```
+GET /skyline.svg?lon=<longitude>&lat=<latitude>&radius=<km>&directions=<n>&furthest=<bool>&steps=<n>&observerHeight=<m>&targetHeight=<m>&refraction=<bool>&width=<px>&heightScale=<n>
+GET /skyline.svg?lon=<longitude>&lat=<latitude>&lon2=<longitude>&lat2=<latitude>&...
+```
+
+| Parameter | Required | Default | Description |
+|-----------|----------|---------|-------------|
+| `lon` / `lat` | yes | — | Centre point |
+| `radius` | one of `radius` / `lon2`+`lat2` | — | Circle radius in kilometres, 0.5–200 |
+| `lon2` / `lat2` | one of `radius` / `lon2`+`lat2` | — | A point the circle should pass through instead — radius becomes the distance from the centre out to this point, echoing `/line.svg`'s `lon2`/`lat2` |
+| `directions` | no | 360 | Number of bearings sampled around the circle, 8–720 |
+| `furthest` | no | false | See below |
+| `steps` | no | 256 | Samples per bearing out to `radius`, 8–2000 — only used when `furthest=true` |
+| `observerHeight` | no | 1.7 | Height (metres) added to the centre point's ground elevation |
+| `targetHeight` | no | 0 | Height (metres) added to every sampled point |
+| `refraction` | no | true | Same 7/6-Earth-radius correction as `/viewshed`/`/visibility` |
+| `width` | no | 800 | Output SVG width in pixels, 100–2000 |
+| `heightScale` | no | 1 | Vertical exaggeration factor, 0.001–100000 (see below) |
+
+`/line.svg`'s circular sibling: instead of a straight path between two points, samples elevation all the way around a circle and plots it as a wrapping profile. The x-axis is bearing (0–360°) rather than distance, so the plotted line's value at the left edge always exactly matches its value at the right edge — both are bearing 0 — meaning the line joins seamlessly if tiled side by side or wrapped into a loop.
+
+At `furthest=false` (the default), each bearing samples the ground elevation exactly at `radius` — a literal cross-section of the circle's edge, regardless of what's in between. At `furthest=true`, each bearing instead runs the same outward line-of-sight scan as `/viewshed` (`steps` samples out to `radius`, tracking the steepest angle seen so far) and plots the furthest genuinely *visible* point instead, so a closer hill correctly hides whatever's behind it. This is what actually constructs a skyline: the silhouette of what you'd see standing at the centre point and turning through 360°, rather than just whatever happens to sit on a fixed-radius ring.
+
+Both modes plot the same quantity — elevation relative to the observer's eye level, with the same curvature/refraction correction `/viewshed` uses — so `furthest=true` isn't a different unit, just a pricier search (`directions × steps` samples instead of `directions`) for which point to plot at each bearing. There's no natural horizontal distance scale here, since the x-axis is angular rather than metric, so the vertical scale instead borrows the px-per-metre a `/line.svg` path of length `radius` would use, purely so `heightScale=1` still means true-to-life proportions.
+
+![Skyline profile around a 5km circle centred on the Tyne estuary, default settings](docs/skyline-example.svg)
+*`/skyline.svg?lon=-1.5&lat=55.0&radius=5` — every other parameter at default (`directions=360`, `furthest=false`, `heightScale=1`). As flat as `/line.svg`'s true-scale profile above, for the same reason: real terrain barely registers at 1px-per-metre proportions.*
+
+![Furthest-visible skyline around a 15km circle centred on the Tyne estuary, exaggerated](docs/skyline-furthest-example.svg)
+*`/skyline.svg?lon=-1.5&lat=55.0&radius=15&furthest=true&heightScale=5` — the actual visible horizon in every direction from the estuary, out to 15km, with `heightScale` raised to 5 to make it visible at all (same true-scale flatness problem as above, otherwise).*
 
 ### Line-of-sight
 
@@ -216,9 +266,12 @@ For each bearing, marches outward sampling elevation (bilinearly interpolated, s
 Returns a GeoJSON `Feature` with a `Polygon` geometry — the boundary of furthest visibility in every direction:
 
 ```json
-{ "type": "Feature", "properties": { "lon": -2.7036, "lat": 56.2208, "radiusKm": 30, ... },
-  "geometry": { "type": "Polygon", "coordinates": [[[lon, lat], ...]] } }
+{ "type": "Feature",
+  "properties": { "lon": -1.5, "lat": 55, "radiusKm": 30, "directions": 360, "steps": 256, "observerHeight": 1.7, "targetHeight": 0, "refraction": true },
+  "geometry": { "type": "Polygon", "coordinates": [[[-1.5, 55.003162], [-1.499904, 55.003161], ..., [-1.5, 55.003162]]] } }
 ```
+
+Real output from `/viewshed?lon=-1.5&lat=55.0` (all other parameters default) — an observer standing at the estuary, `coordinates` truncated here from 361 points to 3.
 
 Note the shape can be sharply non-convex — a hillside 200m away can legitimately be the furthest visible point in one direction while an adjacent bearing looking down an open valley or coastline sees 20+ km, with no smooth transition between them.
 
@@ -243,11 +296,13 @@ GET packs `targets` into the query string, which is fine for a handful of points
 A target given as `lon,lat` is assumed to sit at ground level — whatever that happens to be at that point — plus `targetHeight`. A target given as `lon,lat,altitude` is pinned to that absolute altitude instead (e.g. a drone at a known height), ignoring both the sampled terrain and `targetHeight` for that point.
 
 ```json
-{ "lon": -2.7036, "lat": 56.2208, "observerHeight": 1.7, "targetHeight": 0, "refraction": true,
+{ "lon": -1.5, "lat": 55, "observerHeight": 1.7, "targetHeight": 0, "refraction": true,
   "results": [
-    { "lon": -2.9, "lat": 56.05, "distanceKm": 22.556, "visible": true, "groundElevation": 0, "altitude": 500 }
+    { "lon": -1.55, "lat": 55.05, "distanceKm": 6.408, "visible": false, "groundElevation": 46.0, "altitude": 46.0 }
   ] }
 ```
+
+Real output from `/visibility?lon=-1.5&lat=55.0&targets=-1.55,55.05` (all other parameters default) — a target 6.4km away across the estuary, not visible from the observer point at ground level.
 
 Because `/viewshed` and `/visibility` sample at different resolutions (a fixed step count over a fixed radius vs. a fixed density per path, since every target is a different distance away), they can disagree right at a visibility boundary — a point `/viewshed` reports as its furthest-visible in some direction might come back `visible: false` here at the default `stepsPerKm`, because the finer sampling along that specific path catches an intermediate obstruction the coarser radial scan stepped over. Raising `stepsPerKm` (or lowering `/viewshed`'s `steps`) narrows that gap; neither endpoint is "wrong", they're both discretized approximations of a continuous problem.
 
