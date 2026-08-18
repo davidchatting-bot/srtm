@@ -1194,6 +1194,118 @@ app.get("/line.svg", (req, res) => {
   }
 });
 
+app.get("/skyline.svg", (req, res) => {
+  try {
+    const lon = parseFloat(req.query.lon);
+    const lat = parseFloat(req.query.lat);
+    if (isNaN(lon) || isNaN(lat)) return res.status(400).send("Invalid lon/lat");
+
+    // The circle can be given directly as a radius, or (echoing /line.svg's
+    // lon2/lat2) as a second point that should sit on its edge — radius is
+    // then just the distance from the centre out to that point.
+    let radiusKm;
+    if (req.query.radius !== undefined) {
+      radiusKm = parseFloat(req.query.radius);
+    } else if (req.query.lon2 !== undefined && req.query.lat2 !== undefined) {
+      const lon2 = parseFloat(req.query.lon2);
+      const lat2 = parseFloat(req.query.lat2);
+      if (isNaN(lon2) || isNaN(lat2)) return res.status(400).send("Invalid lon2/lat2");
+      radiusKm = haversineDistanceKm(lon, lat, lon2, lat2);
+    } else {
+      return res.status(400).send("Provide either radius or lon2/lat2");
+    }
+    if (isNaN(radiusKm)) return res.status(400).send("Invalid radius");
+    radiusKm = Math.min(200, Math.max(0.5, radiusKm));
+
+    const directions = Math.min(720, Math.max(8, parseInt(req.query.directions) || 360));
+    const steps = Math.min(2000, Math.max(8, parseInt(req.query.steps) || 256));
+    const furthest = req.query.furthest === "true" || req.query.furthest === "1";
+    const observerHeight = parseFloat(req.query.observerHeight) || 1.7;
+    const targetHeight = parseFloat(req.query.targetHeight) || 0;
+    const refraction = req.query.refraction !== "false" && req.query.refraction !== "0";
+    const width = Math.min(2000, Math.max(100, parseInt(req.query.width) || 800));
+    const heightScale = Math.min(100000, Math.max(0.001, parseFloat(req.query.heightScale) || 1));
+
+    const { latOffset, lonOffset } = kmToDegreeOffsets(lat, radiusKm);
+    const cache = loadSRTMCache(lon - lonOffset, lat - latOffset, lon + lonOffset, lat + latOffset);
+    if (cache.size === 0) return res.status(404).send("No elevation data available");
+
+    const observerGroundElev = sampleCache(cache, lon, lat);
+    if (isNaN(observerGroundElev)) return res.status(404).send("No elevation data at observer location");
+    const observerElev = observerGroundElev + observerHeight;
+
+    // The x-axis here is bearing, not distance, so there's no natural
+    // horizontal metres-per-pixel to inherit a vertical scale from the way
+    // /line.svg does. Instead the vertical scale ties to the px-per-metre a
+    // /line.svg path of length `radius` would use, purely so heightScale=1
+    // still means "true to life proportions" here too.
+    const scale = width / (radiusKm * 1000);
+    const yScale = scale * heightScale;
+    const stepKm = radiusKm / steps;
+
+    // i === directions repeats bearing 0 — the same value as i === 0, drawn
+    // at the opposite edge of the strip, so the line joins seamlessly if
+    // tiled side by side or wrapped into a loop.
+    const rawPoints = new Array(directions + 1);
+    let minY = Infinity, maxY = -Infinity;
+
+    for (let i = 0; i <= directions; i++) {
+      const bearing = (i % directions) * (360 / directions);
+      let heightM;
+
+      if (furthest) {
+        // Same outward march as /viewshed: track the point with the
+        // steepest line-of-sight angle seen so far along this bearing, so a
+        // closer hill correctly hides whatever is behind it. heightM is
+        // that angle's numerator — the apparent height above eye level,
+        // curvature and refraction already folded in — rather than the raw
+        // elevation, so the plotted skyline is what's actually visible.
+        let maxAngle = -Infinity;
+        heightM = 0;
+        for (let s = 1; s <= steps; s++) {
+          const dKm = s * stepKm;
+          const { lon: tLon, lat: tLat } = destinationPoint(lon, lat, bearing, dKm);
+          const elev = elevationOrSeaLevel(cache, tLon, tLat) + targetHeight;
+          const h = elev - observerElev - curvatureDropM(dKm, refraction);
+          const angle = Math.atan2(h, dKm * 1000);
+          if (angle > maxAngle) {
+            maxAngle = angle;
+            heightM = h;
+          }
+        }
+      } else {
+        // Literal circle: sample ground elevation exactly at `radius`,
+        // regardless of whether anything closer would actually block it.
+        const { lon: tLon, lat: tLat } = destinationPoint(lon, lat, bearing, radiusKm);
+        const elev = elevationOrSeaLevel(cache, tLon, tLat) + targetHeight;
+        heightM = elev - observerElev - curvatureDropM(radiusKm, refraction);
+      }
+
+      const y = heightM * yScale;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+      rawPoints[i] = { x: (i / directions) * width, y };
+    }
+
+    const strokeWidth = 1.5;
+    const pad = strokeWidth / 2;
+    const viewMinY = -maxY - pad;
+    const viewHeight = (maxY - minY) + strokeWidth;
+
+    const points = rawPoints.map(p => `${p.x.toFixed(1)},${(-p.y).toFixed(1)}`).join(" ");
+
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${viewHeight.toFixed(1)}" viewBox="0 ${viewMinY.toFixed(1)} ${width} ${viewHeight.toFixed(1)}">` +
+      `<polyline points="${points}" fill="none" stroke="#000" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round"/>` +
+      `</svg>`;
+
+    res.setHeader("Content-Type", "image/svg+xml");
+    res.send(svg);
+  } catch (err) {
+    console.error(err);
+    res.status(500).send("Server error");
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Server running at http://localhost:${PORT}`);
 });

@@ -207,6 +207,39 @@ When `curved` is enabled, each sample has the exact sagitta added — the height
 ![Terrain profile from the Tyne estuary to a nearby hill, barely visible at true scale](docs/line-example.svg)
 *`/line.svg?lon1=-1.5&lat1=55.0&lon2=-1.735&lat2=54.884` — from the estuary to the highest point (≈247m) found within 15km of it, so about as dramatic a profile as this area offers. Every other parameter is at default, including `heightScale=1` (true scale) — and at true scale it's still only 11px tall in an 800px-wide image. Real terrain is far flatter in profile than it looks on a map; that's exactly why `heightScale` exists (try `heightScale=20`).*
 
+### Skyline profile
+
+```
+GET /skyline.svg?lon=<longitude>&lat=<latitude>&radius=<km>&directions=<n>&furthest=<bool>&steps=<n>&observerHeight=<m>&targetHeight=<m>&refraction=<bool>&width=<px>&heightScale=<n>
+GET /skyline.svg?lon=<longitude>&lat=<latitude>&lon2=<longitude>&lat2=<latitude>&...
+```
+
+| Parameter | Required | Default | Description |
+|-----------|----------|---------|-------------|
+| `lon` / `lat` | yes | — | Centre point |
+| `radius` | one of `radius` / `lon2`+`lat2` | — | Circle radius in kilometres, 0.5–200 |
+| `lon2` / `lat2` | one of `radius` / `lon2`+`lat2` | — | A point the circle should pass through instead — radius becomes the distance from the centre out to this point, echoing `/line.svg`'s `lon2`/`lat2` |
+| `directions` | no | 360 | Number of bearings sampled around the circle, 8–720 |
+| `furthest` | no | false | See below |
+| `steps` | no | 256 | Samples per bearing out to `radius`, 8–2000 — only used when `furthest=true` |
+| `observerHeight` | no | 1.7 | Height (metres) added to the centre point's ground elevation |
+| `targetHeight` | no | 0 | Height (metres) added to every sampled point |
+| `refraction` | no | true | Same 7/6-Earth-radius correction as `/viewshed`/`/visibility` |
+| `width` | no | 800 | Output SVG width in pixels, 100–2000 |
+| `heightScale` | no | 1 | Vertical exaggeration factor, 0.001–100000 (see below) |
+
+`/line.svg`'s circular sibling: instead of a straight path between two points, samples elevation all the way around a circle and plots it as a wrapping profile. The x-axis is bearing (0–360°) rather than distance, so the plotted line's value at the left edge always exactly matches its value at the right edge — both are bearing 0 — meaning the line joins seamlessly if tiled side by side or wrapped into a loop.
+
+At `furthest=false` (the default), each bearing samples the ground elevation exactly at `radius` — a literal cross-section of the circle's edge, regardless of what's in between. At `furthest=true`, each bearing instead runs the same outward line-of-sight scan as `/viewshed` (`steps` samples out to `radius`, tracking the steepest angle seen so far) and plots the furthest genuinely *visible* point instead, so a closer hill correctly hides whatever's behind it. This is what actually constructs a skyline: the silhouette of what you'd see standing at the centre point and turning through 360°, rather than just whatever happens to sit on a fixed-radius ring.
+
+Both modes plot the same quantity — elevation relative to the observer's eye level, with the same curvature/refraction correction `/viewshed` uses — so `furthest=true` isn't a different unit, just a pricier search (`directions × steps` samples instead of `directions`) for which point to plot at each bearing. There's no natural horizontal distance scale here, since the x-axis is angular rather than metric, so the vertical scale instead borrows the px-per-metre a `/line.svg` path of length `radius` would use, purely so `heightScale=1` still means true-to-life proportions.
+
+![Skyline profile around a 5km circle centred on the Tyne estuary, default settings](docs/skyline-example.svg)
+*`/skyline.svg?lon=-1.5&lat=55.0&radius=5` — every other parameter at default (`directions=360`, `furthest=false`, `heightScale=1`). As flat as `/line.svg`'s true-scale profile above, for the same reason: real terrain barely registers at 1px-per-metre proportions.*
+
+![Furthest-visible skyline around a 15km circle centred on the Tyne estuary, exaggerated](docs/skyline-furthest-example.svg)
+*`/skyline.svg?lon=-1.5&lat=55.0&radius=15&furthest=true&heightScale=20` — the actual visible horizon in every direction from the estuary, out to 15km, with `heightScale` raised to 20 to make it visible at all (same true-scale flatness problem as above, otherwise).*
+
 ### Line-of-sight
 
 Both endpoints below are two views onto the same line-of-sight test, sharing one implementation (`lineOfSightAngle`/`lineOfSightAngleAtElevation`): `/viewshed` scans outward from the observer to find the visibility boundary in every direction; `/visibility` instead checks specific target points against the observer. Both return JSON.
