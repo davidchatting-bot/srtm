@@ -1219,7 +1219,6 @@ app.get("/skyline.svg", (req, res) => {
 
     const directions = Math.min(720, Math.max(8, parseInt(req.query.directions) || 360));
     const steps = Math.min(2000, Math.max(8, parseInt(req.query.steps) || 256));
-    const furthest = req.query.furthest === "true" || req.query.furthest === "1";
     const observerHeight = parseFloat(req.query.observerHeight) || 1.7;
     const targetHeight = parseFloat(req.query.targetHeight) || 0;
     const refraction = req.query.refraction !== "false" && req.query.refraction !== "0";
@@ -1251,34 +1250,25 @@ app.get("/skyline.svg", (req, res) => {
 
     for (let i = 0; i <= directions; i++) {
       const bearing = (i % directions) * (360 / directions);
-      let heightM;
 
-      if (furthest) {
-        // Same outward march as /viewshed: track the point with the
-        // steepest line-of-sight angle seen so far along this bearing, so a
-        // closer hill correctly hides whatever is behind it. heightM is
-        // that angle's numerator — the apparent height above eye level,
-        // curvature and refraction already folded in — rather than the raw
-        // elevation, so the plotted skyline is what's actually visible.
-        let maxAngle = -Infinity;
-        heightM = 0;
-        for (let s = 1; s <= steps; s++) {
-          const dKm = s * stepKm;
-          const { lon: tLon, lat: tLat } = destinationPoint(lon, lat, bearing, dKm);
-          const elev = elevationOrSeaLevel(cache, tLon, tLat) + targetHeight;
-          const h = elev - observerElev - curvatureDropM(dKm, refraction);
-          const angle = Math.atan2(h, dKm * 1000);
-          if (angle > maxAngle) {
-            maxAngle = angle;
-            heightM = h;
-          }
-        }
-      } else {
-        // Literal circle: sample ground elevation exactly at `radius`,
-        // regardless of whether anything closer would actually block it.
-        const { lon: tLon, lat: tLat } = destinationPoint(lon, lat, bearing, radiusKm);
+      // Same outward march as /viewshed: track the point with the
+      // steepest line-of-sight angle seen so far along this bearing, so a
+      // closer hill correctly hides whatever is behind it. heightM is that
+      // angle's numerator — the apparent height above eye level, curvature
+      // and refraction already folded in — rather than the raw elevation,
+      // so the plotted skyline is what's actually visible.
+      let maxAngle = -Infinity;
+      let heightM = 0;
+      for (let s = 1; s <= steps; s++) {
+        const dKm = s * stepKm;
+        const { lon: tLon, lat: tLat } = destinationPoint(lon, lat, bearing, dKm);
         const elev = elevationOrSeaLevel(cache, tLon, tLat) + targetHeight;
-        heightM = elev - observerElev - curvatureDropM(radiusKm, refraction);
+        const h = elev - observerElev - curvatureDropM(dKm, refraction);
+        const angle = Math.atan2(h, dKm * 1000);
+        if (angle > maxAngle) {
+          maxAngle = angle;
+          heightM = h;
+        }
       }
 
       const y = heightM * yScale;
