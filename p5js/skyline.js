@@ -21,8 +21,8 @@ const PX_PER_M = 0.5;                 // vertical legibility scale — no real h
                                        // distance axis here to tie a "true scale" to
 const RING_SAMPLES = 144;
 const PAD = 24;
-const LABEL_BEARING = 315;            // where radius labels stack, away from the N/E/S/W
-                                       // compass letters (0/90/180/270) and the "start" marker
+const LABEL_OFFSET = 12;              // how far below each ring's own north (bearing-0) point
+                                       // its "Nkm" label sits, SVG user units
 
 // Isometric projection rotates a true ground-plane circle into a screen
 // ellipse. Bearing 0 (north) only lands at the ellipse's screen-top vertex
@@ -67,8 +67,10 @@ function ringRadiusPx(radiusKm, maxRadiusKm) {
 
 // rings: [{ radiusKm, data }, ...], ascending by radiusKm. Each gets its own ring + skyline
 // polyline at a proportionally-scaled screen radius (see ringRadiusPx above) and a small label
-// stacked outward along LABEL_BEARING; only the outermost ring gets compass letters and a
-// "start" (bearing-0) marker, since those would otherwise repeat identically at every radius.
+// directly under its own line at bearing 0 (12 o'clock); only the outermost ring gets compass
+// letters and a "start" (bearing-0) marker, since those would otherwise repeat at every radius.
+// Every ring/skyline is drawn identically (plain black, via the shared .ring/.skyline classes,
+// no per-ring styling) - radius alone (plus the label) is what tells them apart.
 function buildIsometricSVG(rings) {
   const maxRadiusKm = Math.max(...rings.map(r => r.radiusKm));
   const outerRadiusKm = rings[rings.length - 1].radiusKm;
@@ -77,11 +79,8 @@ function buildIsometricSVG(rings) {
   // One pass building every point in original (unshifted) coordinates - the bounding box (and
   // so the translation every point needs) isn't known until all of them exist, so formatting
   // to a "points" string happens in a second, purely-textual pass below, not here.
-  const built = rings.map(({ radiusKm, data }, i) => {
+  const built = rings.map(({ radiusKm, data }) => {
     const ringR = ringRadiusPx(radiusKm, maxRadiusKm);
-    // Inner (smaller/closer) radii are drawn fainter, so the outermost - typically the one
-    // with most of interest further out - reads as the most prominent without needing colour.
-    const opacity = rings.length > 1 ? (0.4 + 0.6 * (i / (rings.length - 1))).toFixed(2) : 1;
 
     const linePts = data.map(({ bearing, heightM }) => {
       const { dx, dy } = groundPoint(bearing, ringR);
@@ -95,10 +94,12 @@ function buildIsometricSVG(rings) {
       ringPts.push(isoProject(dx, dy, 0));
     }
 
-    const { dx: ldx, dy: ldy } = groundPoint(LABEL_BEARING, ringR);
-    const labelPt = isoProject(ldx * 1.12, ldy * 1.12, 0);
+    // linePts[0] is the line's own bearing-0 (north) point - the label sits just below that
+    // exact spot, so it always reads as "this ring's distance", not a generic outward tick.
+    const northLinePt = linePts[0];
+    const labelPt = { x: northLinePt.x, y: northLinePt.y + LABEL_OFFSET };
 
-    return { radiusKm, opacity, linePts, ringPts, labelPt };
+    return { radiusKm, linePts, ringPts, labelPt };
   });
 
   const compass = [["N", 0], ["E", 90], ["S", 180], ["W", 270]].map(([label, bearing]) => {
@@ -121,11 +122,11 @@ function buildIsometricSVG(rings) {
   const fmt = p => `${(p.x - minX).toFixed(1)},${(p.y - minY).toFixed(1)}`;
 
   const ringEls = built.map(b =>
-    `<polyline class="ring" style="opacity:${b.opacity}" points="${b.ringPts.map(fmt).join(" ")}" />`
+    `<polyline class="ring" points="${b.ringPts.map(fmt).join(" ")}" />`
   ).join("");
 
   const skylineEls = built.map(b =>
-    `<polyline class="skyline" style="opacity:${b.opacity}" points="${b.linePts.map(fmt).join(" ")}" />`
+    `<polyline class="skyline" points="${b.linePts.map(fmt).join(" ")}" />`
   ).join("");
 
   const labelEls = built.map(b =>
