@@ -51,14 +51,17 @@ Most tunable values are constants at the top of `sketch.js`:
 Since `/skyline.svg` only returns rendered SVG, not raw JSON, `skyline.js` recovers the real bearing/height samples by parsing its own output back out (`width` and the `<polyline points="...">` attribute), the same "decode the server's own rendered output" approach `sketch.js` already uses for elevation tiles — just on an SVG string instead of PNG pixels. It then re-projects those samples itself:
 
 - **Isometric angle**: true isometric (30° ground-line angle: `KX = cos(30°)`, `KY = sin(30°)`), not the flatter 2:1 dimetric ratio common in pixel-art isometric tiles.
-- **North at the top**: an isometric projection skews a true ground-plane circle into a rotated ellipse, so bearing 0 only lands at the ellipse's screen-top vertex after a −45° ground-angle offset is applied first (see `groundPoint()`). The rendered line always starts there and runs clockwise (N→E→S→W), marked with a small dot.
-- **Vertical scale**: `PX_PER_M = 0.5`, a legibility pick rather than a geographic one — unlike `/line.svg`, there's no real horizontal distance axis here to tie a "true scale" to, since the x-axis is bearing, not distance.
+- **North at the top**: an isometric projection skews a true ground-plane circle into a rotated ellipse, so bearing 0 only lands at the ellipse's screen-top vertex after a −45° ground-angle offset is applied first (see `groundPoint()`). The outermost ring's line always starts there and runs clockwise (N→E→S→W), marked with a small dot.
+- **Vertical scale**: `PX_PER_M = 0.5`, a legibility pick rather than a geographic one — unlike `/line.svg`, there's no real horizontal distance axis here to tie a "true scale" to, since the x-axis is bearing, not distance. It's the same for every radius, so real elevation genuinely is comparable ring to ring.
+- **Multiple radii**: `?radii=5,10,15` (comma-separated) fetches `/skyline.svg` once per radius and draws them as concentric rings in one image, instead of the single `?radius=` ring. Screen radius scales linearly with real radius (`ringRadiusPx()`) — `MAX_RING_R` sets the size of whichever radius is *largest*, so a single radius still renders exactly as before. Inner (smaller) rings are drawn at lower opacity, ramping up to full opacity at the outermost, so the ring with the most going on stays the most prominent without needing colour; only the outermost ring gets the N/E/S/W compass letters and the bearing-0 start marker, since those would otherwise repeat identically at every radius. Each ring gets a small `Nkm` label stacked outward along `LABEL_BEARING` (315° — northwest, chosen just to stay clear of the compass letters).
 
 | Constant | Default | Description |
 |----------|---------|-------------|
 | `LON_DEFAULT` / `LAT_DEFAULT` | −1.6 / 55.0 | Centre point, overridable via `?lon=`/`?lat=` in the URL |
-| `RADIUS_KM_DEFAULT` | 15 | Search radius in kilometres, overridable via `?radius=` |
+| `RADII_KM_DEFAULT` | `[15]` | Search radii in kilometres, overridable via `?radii=5,10,15` (or the single-value `?radius=`) |
 | `DIRECTIONS_DEFAULT` | 360 | Bearings sampled, overridable via `?directions=` |
 | `PX_PER_M` | 0.5 | Vertical scale (see above) |
+| `MAX_RING_R` | 230 | Screen radius (SVG user units) of the largest ring drawn |
+| `LABEL_BEARING` | 315 | Bearing along which the `Nkm` radius labels stack |
 
-The form (top-left) re-fetches and re-renders on submit; the info bar (bottom-left) shows centre, radius, and bearing count — no elevation-range readout, since that would mean scanning every sample on every load just to display a number nothing else here depends on.
+The form (top-left) re-fetches and re-renders on submit — "Radii (km)" takes one value or a comma-separated list; the info bar (bottom-left) shows centre, radii, and bearing count — no elevation-range readout, since that would mean scanning every sample on every load just to display a number nothing else here depends on.
