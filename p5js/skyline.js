@@ -23,6 +23,8 @@ const RING_SAMPLES = 144;
 const PAD = 24;
 const LABEL_OFFSET = 12;              // how far below each ring's own north (bearing-0) point
                                        // its "Nkm" label sits, SVG user units
+const CENTRE_R = 6;                   // ground-plane radius of the filled centre marker (the
+                                       // observer's own position) - same units as MAX_RING_R
 
 // Isometric projection rotates a true ground-plane circle into a screen
 // ellipse. Bearing 0 (north) only lands at the ellipse's screen-top vertex
@@ -111,7 +113,17 @@ function buildIsometricSVG(rings) {
   const { dx: sdx, dy: sdy } = groundPoint(0, outerRingR);
   const start = isoProject(sdx, sdy, outerData[0].heightM * PX_PER_M);
 
-  const all = built.flatMap(b => [...b.linePts, ...b.ringPts, b.labelPt]).concat(compass, [start]);
+  // The observer's own position, ground level, dead centre - built the same way as the rings
+  // themselves (groundPoint sampled around a circle, then isoProject), just at a small fixed
+  // radius, so it comes out as the same isometric ellipse shape/orientation as every ring,
+  // rather than a screen-space circle that would look tilted relative to everything else here.
+  const centrePts = [];
+  for (let s = 0; s <= RING_SAMPLES; s++) {
+    const { dx, dy } = groundPoint((s / RING_SAMPLES) * 360, CENTRE_R);
+    centrePts.push(isoProject(dx, dy, 0));
+  }
+
+  const all = built.flatMap(b => [...b.linePts, ...b.ringPts, b.labelPt]).concat(compass, [start], centrePts);
   let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
   for (const p of all) {
     minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
@@ -137,11 +149,14 @@ function buildIsometricSVG(rings) {
     `<text class="compass" x="${(c.x - minX).toFixed(1)}" y="${(c.y - minY).toFixed(1)}">${c.label}</text>`
   ).join("");
 
+  const centreEl = `<polygon class="centre" points="${centrePts.map(fmt).join(" ")}" />`;
+
   return `<svg viewBox="0 0 ${vbW.toFixed(1)} ${vbH.toFixed(1)}" xmlns="http://www.w3.org/2000/svg">` +
     ringEls +
     skylineEls +
     compassEls +
     labelEls +
+    centreEl +
     `<circle class="start" cx="${(start.x - minX).toFixed(1)}" cy="${(start.y - minY).toFixed(1)}" r="3.5" />` +
     `</svg>`;
 }
